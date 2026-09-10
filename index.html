@@ -6,17 +6,17 @@
 <title>Assistente IA — Cricon</title>
 <style>
   :root {
-    --bg-deep: #05070d;
-    --bg: #0a0e1a;
-    --panel: rgba(255,255,255,0.045);
-    --panel-solid: #10141f;
-    --panel-border: rgba(255,255,255,0.09);
-    --accent1: #8b5cf6;
-    --accent2: #22d3ee;
-    --accent-grad: linear-gradient(135deg, #8b5cf6, #22d3ee);
-    --text: #e9edf7;
-    --text-dim: #8b93a7;
-    --text-faint: #545d71;
+    --bg-deep: #02040c;
+    --bg: #060a18;
+    --panel: rgba(180,200,255,0.05);
+    --panel-solid: #0b0f1e;
+    --panel-border: rgba(160,180,255,0.1);
+    --accent1: #4f6bff;
+    --accent2: #38bdf8;
+    --accent-grad: linear-gradient(135deg, #4f6bff, #38bdf8);
+    --text: #e8edfb;
+    --text-dim: #8992b8;
+    --text-faint: #4c5378;
     --danger: #f87171;
     --ok: #34d399;
   }
@@ -32,30 +32,33 @@
     overflow: hidden;
   }
 
-  /* ---------- animated background ---------- */
+  /* ---------- galaxy background ---------- */
   .bg-fx {
     position: fixed; inset: 0;
     z-index: 0;
-    background: var(--bg);
+    background:
+      radial-gradient(ellipse 90% 70% at 30% -10%, rgba(79,107,255,0.22), transparent 60%),
+      radial-gradient(ellipse 70% 60% at 100% 100%, rgba(56,189,248,0.14), transparent 60%),
+      radial-gradient(ellipse 100% 80% at 50% 50%, #0a1230 0%, var(--bg-deep) 70%);
     overflow: hidden;
   }
   .bg-fx::before, .bg-fx::after {
     content: "";
     position: absolute;
-    width: 60vw; height: 60vw;
+    width: 55vw; height: 55vw;
     border-radius: 50%;
-    filter: blur(90px);
-    opacity: 0.16;
+    filter: blur(110px);
+    opacity: 0.22;
   }
   .bg-fx::before {
-    background: var(--accent1);
-    top: -20%; left: -10%;
-    animation: float1 22s ease-in-out infinite alternate;
+    background: radial-gradient(circle, #5b6fff, transparent 70%);
+    top: -18%; left: -12%;
+    animation: float1 26s ease-in-out infinite alternate;
   }
   .bg-fx::after {
-    background: var(--accent2);
-    bottom: -25%; right: -10%;
-    animation: float2 26s ease-in-out infinite alternate;
+    background: radial-gradient(circle, #38bdf8, transparent 70%);
+    bottom: -22%; right: -14%;
+    animation: float2 30s ease-in-out infinite alternate;
   }
   @keyframes float1 {
     from { transform: translate(0,0) scale(1); }
@@ -65,11 +68,47 @@
     from { transform: translate(0,0) scale(1); }
     to   { transform: translate(-8%, -6%) scale(1.1); }
   }
+
+  .stars {
+    position: fixed; inset: 0; z-index: 0;
+    background-repeat: repeat;
+  }
+  .stars-small {
+    background-image:
+      radial-gradient(1px 1px at 15% 25%, #cfe0ff 100%, transparent),
+      radial-gradient(1px 1px at 65% 8%, #ffffff 100%, transparent),
+      radial-gradient(1px 1px at 40% 60%, #b9c9ff 100%, transparent),
+      radial-gradient(1px 1px at 85% 45%, #ffffff 100%, transparent),
+      radial-gradient(1px 1px at 10% 80%, #cfe0ff 100%, transparent),
+      radial-gradient(1px 1px at 92% 85%, #ffffff 100%, transparent),
+      radial-gradient(1px 1px at 55% 35%, #b9c9ff 100%, transparent),
+      radial-gradient(1px 1px at 30% 95%, #ffffff 100%, transparent);
+    background-size: 340px 340px;
+    opacity: 0.55;
+    animation: twinkle 5s ease-in-out infinite alternate;
+  }
+  .stars-big {
+    background-image:
+      radial-gradient(1.6px 1.6px at 22% 15%, #ffffff 100%, transparent),
+      radial-gradient(1.6px 1.6px at 75% 65%, #dbe6ff 100%, transparent),
+      radial-gradient(1.6px 1.6px at 48% 80%, #ffffff 100%, transparent),
+      radial-gradient(1.6px 1.6px at 90% 20%, #dbe6ff 100%, transparent),
+      radial-gradient(1.6px 1.6px at 5% 50%, #ffffff 100%, transparent);
+    background-size: 520px 520px;
+    opacity: 0.75;
+    box-shadow: none;
+    animation: twinkle 7s ease-in-out infinite alternate-reverse;
+  }
+  @keyframes twinkle {
+    from { opacity: 0.35; }
+    to   { opacity: 0.9; }
+  }
+
   .bg-grid {
     position: fixed; inset: 0; z-index: 0;
     background-image:
-      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+      linear-gradient(rgba(140,165,255,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(140,165,255,0.02) 1px, transparent 1px);
     background-size: 42px 42px;
     -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, black 40%, transparent 100%);
     mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, black 40%, transparent 100%);
@@ -370,6 +409,8 @@
 <body>
 
 <div class="bg-fx"></div>
+<div class="stars stars-small"></div>
+<div class="stars stars-big"></div>
 <div class="bg-grid"></div>
 
 <div id="loginScreen">
