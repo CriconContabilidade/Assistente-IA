@@ -216,6 +216,16 @@
     border-radius: 7px; padding: 4px 9px; font-size: 0.72rem; cursor: pointer;
   }
   .user-row button:hover { border-color: var(--accent2); color: var(--text); }
+  .admin-badge {
+    background: var(--accent-grad); color: white; font-size: 0.65rem; font-weight: 700;
+    padding: 1px 7px; border-radius: 999px; margin-left: 4px; vertical-align: middle;
+  }
+  .assign-btn {
+    flex-shrink: 0; background: none; border: none; color: var(--text-faint);
+    cursor: pointer; font-size: 0.85rem; opacity: 0; transition: opacity .15s;
+  }
+  .empresa-item:hover .assign-btn { opacity: 1; }
+  .assign-btn:hover { color: var(--accent2); }
 
   /* ---------- main chat area ---------- */
   .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -499,11 +509,23 @@
     rememberMe.checked = false;
   }
 
+  // Mesma lista de administradores usada no Banco de Horas — quem está aqui vê todas as
+  // empresas e pode atribuir o responsável de cada uma; os demais só veem as suas.
+  const ADMIN_EMAILS = ["contabilidadecricon@gmail.com", "guilherme.primetherapy@gmail.com", "rh@cricon.com.br"];
+  function isAdminEmail(email) {
+    return ADMIN_EMAILS.includes((email || "").trim().toLowerCase());
+  }
+
+  let currentUserEmail = null;
+  let isAdmin = false;
+
   onAuthStateChanged(auth, (user) => {
     if (user) {
       loginScreen.style.display = 'none';
       appEl.classList.add('show');
-      userEmail.textContent = user.email;
+      currentUserEmail = user.email;
+      isAdmin = isAdminEmail(user.email);
+      userEmail.innerHTML = user.email + (isAdmin ? ' <span class="admin-badge">admin</span>' : '');
       initEmpresas();
     } else {
       loginScreen.style.display = 'flex';
@@ -540,6 +562,77 @@
     "Equilíbrio", "Vidal Adv"
   ];
 
+  // Conhecimento já documentado nas ferramentas atuais do Hub, reaproveitado aqui como ponto
+  // de partida do "aprendizado" de cada empresa — assim a IA já nasce sabendo o essencial da
+  // lógica de conversão de cada cliente, em vez de começar do zero.
+  const NOTES_SEED = {
+    "Gladius": [
+      "Relatórios de aplicação financeira SICREDI (Posição da Carteira / Resgate Fácil e Consolidado Taxa Selic) geram os lançamentos e a Nota de Serviço dos resgates",
+      "Recebimentos de Alvará/Honorários/Aluguel do extrato geram Nota de Serviço",
+      "Demais lançamentos do extrato geral seguem o cadastro de padrões (baixa de serviços/entradas e lançamentos contábeis)"
+    ],
+    "Holding AFA": ["Extrato Unicred/BTG convertido em Escrita Holding e Lançamentos Holding"],
+    "Holding EBR": ["Extrato Unicred/BTG convertido em Escrita Holding e Lançamentos Holding"],
+    "Holding GBG": ["Extrato Unicred/BTG convertido em Escrita Holding e Lançamentos Holding"],
+    "Holding LTA": ["Extrato Unicred/BTG convertido em Escrita Holding e Lançamentos Holding"],
+    "Mantovani": [
+      "Tem cadastro de imóveis/inquilinos com controle de IPTU",
+      "Lançamentos mensais das 6 imobiliárias viram Mantovani (NFS), Baixas de Serviços e Lançamentos"
+    ],
+    "Samdesc e Cias": [
+      "Extrato de conta corrente Stone gera lançamentos de rendimento, recebimento de vendas e saídas",
+      "O extrato de aplicação (RDC) vem num relatório separado do extrato de conta corrente"
+    ],
+    "Bari": [
+      "Relatório de recibos (NF de Locação) gera a planilha/TXT de Nota Fiscal de Serviços",
+      "Data e CNPJ são corrigidos automaticamente — sempre revisar antes de exportar"
+    ],
+    "Alive": [
+      "O relatório de dízimos/ofertas e despesas vem unificado com a Casa do Pai — precisa separar por empresa",
+      "Extrato Bradesco (conta 366) é o extrato desta empresa; casamento por valor e data"
+    ],
+    "Casa do Pai": [
+      "O relatório de dízimos/ofertas e despesas vem unificado com a Alive — precisa separar por empresa",
+      "Extrato Sicredi (conta 244) é o extrato desta empresa; casamento por valor e data"
+    ],
+    "Sindisaúde": [
+      "Extrato Sicoob convertido em lançamentos de razão via cadastro de padrões (palavra-chave/CPF/CNPJ/valor)",
+      "Repasses ACC entram com parcela por pessoa",
+      "Rendimento de aplicação financeira tem regra própria",
+      "Livro Diário do cliente pode ser usado (opcional) pra sugerir categoria do que sobrar sem padrão"
+    ],
+    "Sindicato dos Cartórios": [
+      "Extrato Credcrea + planilha de fluxo de caixa geram os lançamentos juntos",
+      "Recebimentos de contribuição assistencial são reconhecidos automaticamente",
+      "Pagamentos são casados com o histórico da planilha de fluxo de caixa",
+      "Conta débito fica em branco pra completar manualmente quando não identificada"
+    ],
+    "Dario e Freitas": [
+      "Escritório de advocacia — extrato SICOOB",
+      "Baixa notas fiscais quando existem",
+      "Custas processuais e repasses judiciais sem nota ficam como pendência até casar por valor com o lançamento oposto, em qualquer mês"
+    ],
+    "Rodamundo": [
+      "Fonte é o Demonstrativo Financeiro do Grupo Rodamundo, não extrato bancário",
+      "Receitas e despesas são classificadas direto nas contas do plano de contas, com histórico contábil padronizado",
+      "Inclui rendimento de aplicação e IRRF"
+    ],
+    "Cia da Língua": [
+      "Fontes: Contas Pagas, extrato da Aplicação CDB e extrato da conta corrente",
+      "Gera lançamentos e também a baixa de serviços recebidos de clientes"
+    ],
+    "Equilíbrio": [
+      "Baixa de Serviço cobre cartão e Pix",
+      "Baixa de Pagamentos casa Contas a Pagar com o extrato Unicred",
+      "Lançamentos Contábeis seguem cadastro de padrões próprio"
+    ],
+    "Vidal Adv": [
+      "Extrato Banco Inter convertido em lançamentos por cadastro de padrões",
+      "Baixa de serviços recebidos de clientes",
+      "Rendimentos de aplicações de renda fixa: uma conta por CDB"
+    ]
+  };
+
   const empresasCol = collection(db, "assistenteIA_empresas");
   const empresaListEl = document.getElementById('empresaList');
   const empresaSearch = document.getElementById('empresaSearch');
@@ -553,7 +646,7 @@
       if (!seeded && empresas.length === 0) {
         seeded = true;
         for (const nome of SEED_EMPRESAS) {
-          await addDoc(empresasCol, { nome, notas: [], criadoEm: serverTimestamp() });
+          await addDoc(empresasCol, { nome, notas: [], responsavelEmail: "", criadoEm: serverTimestamp() });
         }
         return; // o próprio onSnapshot vai disparar de novo com os dados criados
       }
@@ -562,18 +655,54 @@
         const still = empresas.find(e => e.id === activeEmpresaId);
         if (still) { renderNotes(still); renderMessagesForActive(); }
       }
+      seedNotesFromHub();
     }, err => {
       console.warn("Firestore indisponível:", err);
     });
+  }
+
+  // Preenche as observações de largada com o que já está documentado no Hub, só na primeira
+  // vez (empresa sem nenhuma nota ainda) — nunca sobrescreve o que alguém já ensinou.
+  const seededNotesFor = new Set();
+  async function seedNotesFromHub() {
+    for (const emp of empresas) {
+      const seed = NOTES_SEED[emp.nome];
+      if (!seed || seededNotesFor.has(emp.id)) continue;
+      if ((emp.notas || []).length > 0) { seededNotesFor.add(emp.id); continue; }
+      seededNotesFor.add(emp.id);
+      try {
+        await updateDoc(doc(db, "assistenteIA_empresas", emp.id), { notas: seed });
+      } catch (err) {
+        console.warn("Não deu pra pré-carregar observações de", emp.nome, err);
+      }
+    }
   }
 
   function initials(nome) {
     return nome.split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
   }
 
+  // Sem admin: só vê empresas sem responsável ainda (de todo mundo) ou atribuídas a ela mesma.
+  function visibleToCurrentUser(emp) {
+    if (isAdmin) return true;
+    if (!emp.responsavelEmail) return true;
+    return emp.responsavelEmail.toLowerCase() === (currentUserEmail || "").toLowerCase();
+  }
+
+  function responsavelLabel(emp) {
+    if (!emp.responsavelEmail) return "Sem responsável — visível pra todos";
+    return "👤 " + emp.responsavelEmail;
+  }
+
+  async function promptAssign(emp) {
+    const val = prompt(`E-mail do responsável por "${emp.nome}" (deixe em branco pra tirar o responsável):`, emp.responsavelEmail || "");
+    if (val === null) return;
+    await updateDoc(doc(db, "assistenteIA_empresas", emp.id), { responsavelEmail: val.trim() });
+  }
+
   function renderEmpresaList(filter = "") {
     const q = filter.trim().toLowerCase();
-    const list = empresas.filter(e => e.nome.toLowerCase().includes(q));
+    const list = empresas.filter(e => visibleToCurrentUser(e) && e.nome.toLowerCase().includes(q));
     empresaListEl.innerHTML = "";
     if (list.length === 0) {
       empresaListEl.innerHTML = '<div style="color:var(--text-faint); font-size:0.8rem; padding:10px;">Nenhuma empresa encontrada.</div>';
@@ -586,9 +715,14 @@
         <div class="empresa-avatar">${initials(emp.nome)}</div>
         <div class="empresa-info">
           <div class="empresa-name">${emp.nome}</div>
-          <div class="empresa-sub">${(emp.notas || []).length} observação(ões) aprendida(s)</div>
+          <div class="empresa-sub">${responsavelLabel(emp)}</div>
         </div>
+        ${isAdmin ? `<button class="assign-btn" title="Atribuir responsável">👤</button>` : ``}
       `;
+      item.querySelector('.assign-btn')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        promptAssign(emp);
+      });
       item.addEventListener('click', () => selectEmpresa(emp.id));
       empresaListEl.appendChild(item);
     });
@@ -599,7 +733,7 @@
   document.getElementById('newEmpresaBtn').addEventListener('click', async () => {
     const nome = prompt("Nome da nova empresa:");
     if (!nome || !nome.trim()) return;
-    const docRef = await addDoc(empresasCol, { nome: nome.trim(), notas: [], criadoEm: serverTimestamp() });
+    const docRef = await addDoc(empresasCol, { nome: nome.trim(), notas: [], responsavelEmail: "", criadoEm: serverTimestamp() });
     selectEmpresa(docRef.id);
   });
 
