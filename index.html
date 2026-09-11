@@ -516,7 +516,6 @@
     getFirestore, collection, doc, addDoc, setDoc, deleteDoc, updateDoc,
     onSnapshot, query, orderBy, serverTimestamp, arrayUnion
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-  import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 
   // Mesmo projeto Firebase do Hub — login já vale automaticamente aqui também.
   const firebaseConfig = {
@@ -532,8 +531,21 @@
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db = getFirestore(app);
-  const functionsClient = getFunctions(app);
-  const assistenteChat = httpsCallable(functionsClient, 'assistenteChat');
+  const WORKER_URL = "https://assistente-ia-cricon.contabilidadecricon.workers.dev";
+  async function assistenteChat(payload) {
+    const idToken = await auth.currentUser.getIdToken();
+    const res = await fetch(WORKER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = new Error(data.error || `Erro ${res.status}`);
+      throw err;
+    }
+    return { data };
+  }
 
   // ---------------- login ----------------
   const loginScreen = document.getElementById('loginScreen');
@@ -942,9 +954,7 @@
     } catch (err) {
       hideTyping();
       console.error('Erro chamando a IA:', err);
-      const msg = err && err.code === 'functions/unavailable'
-        ? 'Não consegui falar com a IA agora — o backend ainda pode não estar publicado.'
-        : `Não consegui obter resposta da IA (${err && err.message ? err.message : 'erro desconhecido'}). Tente novamente em instantes.`;
+      const msg = `Não consegui obter resposta da IA (${err && err.message ? err.message : 'erro desconhecido'}). Tente novamente em instantes.`;
       await addDoc(msgsCol, { role: 'assistant', text: `⚠️ ${msg}`, files: [], criadoEm: serverTimestamp() });
     }
   }
