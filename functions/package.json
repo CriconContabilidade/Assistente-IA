@@ -8,6 +8,7 @@
   "private": true,
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
+    "exceljs": "^4.4.0",
     "firebase-admin": "^14.4.0",
     "firebase-functions": "^7.3.2"
   }

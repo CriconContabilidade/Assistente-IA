@@ -331,6 +331,10 @@
   .typing span:nth-child(2) { animation-delay: .15s; }
   .typing span:nth-child(3) { animation-delay: .3s; }
   @keyframes typingBounce { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
+  .typing-label { font-size: 0.78rem; color: var(--text-dim); margin-top: 2px; }
+
+  .send-btn:disabled { opacity: 0.7; cursor: wait; animation: sendPulse 1.4s infinite ease-in-out; }
+  @keyframes sendPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(56,189,248,0.4); } 50% { box-shadow: 0 0 0 6px rgba(56,189,248,0); } }
 
   /* ---------- composer ---------- */
   .composer-wrap { padding: 16px 26px 22px; }
@@ -1021,7 +1025,8 @@
     pendingFiles = [];
     renderAttachPreview();
 
-    showTyping();
+    setComposerBusy(true);
+    showTyping(filesToSend.length > 0);
     try {
       const filesBase64 = await Promise.all(filesToSend.map(async f => ({
         name: f.name,
@@ -1047,18 +1052,43 @@
       console.error('Erro chamando a IA:', err);
       const msg = `Não consegui obter resposta da IA (${err && err.message ? err.message : 'erro desconhecido'}). Tente novamente em instantes.`;
       await addDoc(msgsCol, { role: 'assistant', text: `⚠️ ${msg}`, files: [], criadoEm: serverTimestamp() });
+    } finally {
+      setComposerBusy(false);
     }
   }
 
-  function showTyping() {
+  function setComposerBusy(busy) {
+    sendBtn.disabled = busy;
+    messageInput.disabled = busy;
+    attachBtn.disabled = busy;
+    sendBtn.textContent = busy ? '⏳' : '➤';
+  }
+
+  let typingTimers = [];
+
+  function showTyping(hasFiles) {
     const t = document.createElement('div');
     t.className = 'msg assistant';
     t.id = 'typingIndicator';
-    t.innerHTML = `<div class="msg-avatar">✨</div><div class="msg-bubble"><div class="typing"><span></span><span></span><span></span></div></div>`;
+    t.innerHTML = `
+      <div class="msg-avatar">✨</div>
+      <div class="msg-bubble">
+        <div class="typing"><span></span><span></span><span></span></div>
+        <div class="typing-label" id="typingLabel">${hasFiles ? 'Lendo os arquivos...' : 'Pensando...'}</div>
+      </div>
+    `;
     chatBody.appendChild(t);
     chatBody.scrollTop = chatBody.scrollHeight;
+
+    const label = document.getElementById('typingLabel');
+    typingTimers.push(setTimeout(() => { if (label) label.textContent = 'Ainda trabalhando nisso — relatórios grandes demoram mais...'; }, 12000));
+    typingTimers.push(setTimeout(() => { if (label) label.textContent = 'Quase lá, só mais um pouco...'; }, 30000));
   }
-  function hideTyping() { document.getElementById('typingIndicator')?.remove(); }
+  function hideTyping() {
+    typingTimers.forEach(clearTimeout);
+    typingTimers = [];
+    document.getElementById('typingIndicator')?.remove();
+  }
 
   // ---------------- notes drawer ----------------
   const drawerOverlay = document.getElementById('drawerOverlay');

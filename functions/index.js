@@ -3,6 +3,7 @@ const { defineSecret } = require("firebase-functions/params");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const Anthropic = require("@anthropic-ai/sdk");
+const ExcelJS = require("exceljs");
 
 initializeApp();
 const db = getFirestore();
@@ -13,6 +14,38 @@ const MODEL = "claude-sonnet-5";
 
 // Tamanho máximo de cada arquivo anexado, em base64 (~8MB de PDF original).
 const MAX_FILE_BASE64_CHARS = 11 * 1024 * 1024;
+
+const TEXT_MEDIA_TYPES = new Set(["text/plain", "text/csv", "application/csv"]);
+const SPREADSHEET_MEDIA_TYPES = new Set([
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel.sheet.macroEnabled.12",
+]);
+
+function cellToString(v) {
+  if (v === null || v === undefined) return "";
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === "object") {
+    if (v.result !== undefined) return cellToString(v.result);
+    if (v.text !== undefined) return String(v.text);
+    if (Array.isArray(v.richText)) return v.richText.map((t) => t.text).join("");
+    return "";
+  }
+  return String(v);
+}
+
+async function xlsxBufferToText(buffer) {
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.load(buffer);
+  const parts = [];
+  workbook.eachSheet((sheet) => {
+    parts.push(`--- Planilha: ${sheet.name} ---`);
+    sheet.eachRow({ includeEmpty: false }, (row) => {
+      const values = Array.isArray(row.values) ? row.values.slice(1) : [];
+      parts.push(values.map(cellToString).join("\t"));
+    });
+  });
+  return parts.join("\n");
+}
 
 function buildSystemPrompt(empresaNome, notas, documentos) {
   const notasTexto = (notas || []).length
@@ -87,6 +120,7 @@ exports.assistenteChat = onCall(
     });
 
     const contentBlocks = [];
+    const arquivosNaoLidos = [];
     for (const f of files || []) {
       if (!f.base64 || !f.mediaType || !f.name) continue;
       if (f.base64.length > MAX_FILE_BASE64_CHARS) {
@@ -102,7 +136,26 @@ exports.assistenteChat = onCall(
           type: "image",
           source: { type: "base64", media_type: f.mediaType, data: f.base64 },
         });
+      } else if (TEXT_MEDIA_TYPES.has(f.mediaType) || f.name.toLowerCase().endsWith(".txt") || f.name.toLowerCase().endsWith(".csv")) {
+        const texto = Buffer.from(f.base64, "base64").toString("utf-8");
+        contentBlocks.push({ type: "text", text: `--- Conteúdo de ${f.name} ---\n${texto}` });
+      } else if (SPREADSHEET_MEDIA_TYPES.has(f.mediaType) || f.name.toLowerCase().endsWith(".xlsx")) {
+        try {
+          const texto = await xlsxBufferToText(Buffer.from(f.base64, "base64"));
+          contentBlocks.push({ type: "text", text: `--- Conteúdo de ${f.name} ---\n${texto}` });
+        } catch (err) {
+          console.error(`Erro lendo planilha ${f.name}:`, err);
+          arquivosNaoLidos.push(f.name);
+        }
+      } else {
+        arquivosNaoLidos.push(f.name);
       }
+    }
+    if (arquivosNaoLidos.length > 0) {
+      contentBlocks.push({
+        type: "text",
+        text: `(Aviso do sistema: não consegui ler o(s) arquivo(s) ${arquivosNaoLidos.join(", ")} — formato ainda não suportado. Avise o usuário disso explicitamente.)`,
+      });
     }
     if (message && message.trim()) {
       contentBlocks.push({ type: "text", text: message.trim() });
