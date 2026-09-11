@@ -594,7 +594,7 @@
   const auth = getAuth(app);
   const db = getFirestore(app);
   const functionsClient = getFunctions(app);
-  const assistenteChat = httpsCallable(functionsClient, 'assistenteChat');
+  const assistenteChat = httpsCallable(functionsClient, 'assistenteChat', { timeout: 280000 });
 
   // ---------------- login ----------------
   const loginScreen = document.getElementById('loginScreen');

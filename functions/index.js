@@ -72,8 +72,11 @@ Quando o usuário enviar um relatório (extrato bancário, contas a pagar/recebe
 }
 
 exports.assistenteChat = onCall(
-  { secrets: [ANTHROPIC_API_KEY], cors: true, timeoutSeconds: 120, memory: "512MiB" },
+  { secrets: [ANTHROPIC_API_KEY], cors: true, timeoutSeconds: 300, memory: "512MiB" },
   async (request) => {
+    const t0 = Date.now();
+    const log = (step) => console.log(`[assistenteChat] ${step} (+${Date.now() - t0}ms)`);
+    log("start");
     if (!request.auth) {
       throw new HttpsError("unauthenticated", "É preciso estar logado.");
     }
@@ -91,6 +94,7 @@ exports.assistenteChat = onCall(
       throw new HttpsError("not-found", "Empresa não encontrada.");
     }
     const empresa = empresaSnap.data();
+    log("empresa carregada");
 
     // Mesma regra de visibilidade do front: admin vê tudo, os demais só a empresa deles
     // (ou sem responsável ainda). Reforça no backend o que a UI já esconde.
@@ -118,6 +122,7 @@ exports.assistenteChat = onCall(
         : "";
       return { arquivos: data.arquivos || [], resumo: data.resumo || "", dataTexto };
     });
+    log(`histórico de documentos carregado (${documentos.length})`);
 
     const contentBlocks = [];
     const arquivosNaoLidos = [];
@@ -161,6 +166,7 @@ exports.assistenteChat = onCall(
       contentBlocks.push({ type: "text", text: message.trim() });
     }
 
+    log(`conteúdo montado (${contentBlocks.length} blocos)`);
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY.value() });
 
     const messages = [
@@ -171,6 +177,7 @@ exports.assistenteChat = onCall(
       { role: "user", content: contentBlocks },
     ];
 
+    log("chamando a Anthropic API");
     let response;
     try {
       response = await anthropic.messages.create({
@@ -183,6 +190,7 @@ exports.assistenteChat = onCall(
       console.error("Erro chamando a Anthropic API:", err);
       throw new HttpsError("internal", "Erro ao falar com a IA. Tente novamente em instantes.");
     }
+    log("resposta da Anthropic recebida");
 
     const text = response.content
       .filter((b) => b.type === "text")
@@ -203,6 +211,7 @@ exports.assistenteChat = onCall(
           criadoEm: FieldValue.serverTimestamp(),
         });
     }
+    log("finalizado");
 
     return { text, usage: response.usage || null };
   }
