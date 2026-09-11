@@ -1,7 +1,7 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const { initializeApp } = require("firebase-admin/app");
-const { getFirestore } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const Anthropic = require("@anthropic-ai/sdk");
 
 initializeApp();
@@ -14,10 +14,16 @@ const MODEL = "claude-sonnet-5";
 // Tamanho máximo de cada arquivo anexado, em base64 (~8MB de PDF original).
 const MAX_FILE_BASE64_CHARS = 11 * 1024 * 1024;
 
-function buildSystemPrompt(empresaNome, notas) {
+function buildSystemPrompt(empresaNome, notas, documentos) {
   const notasTexto = (notas || []).length
     ? notas.map((n) => `- ${n}`).join("\n")
     : "(nenhuma observação registrada ainda para esta empresa)";
+
+  const documentosTexto = (documentos || []).length
+    ? documentos
+        .map((d) => `[${d.dataTexto}] ${d.arquivos.join(", ")}\n${d.resumo}`)
+        .join("\n\n")
+    : "(nenhum relatório processado ainda para esta empresa)";
 
   return `Você é o Assistente IA do escritório de contabilidade Cricon, especializado em ler relatórios contábeis e bancários e convertê-los em lançamentos/arquivos prontos para importação no sistema Domínio.
 
@@ -26,7 +32,10 @@ Empresa atual: ${empresaNome}
 Observações e padrões já ensinados especificamente para esta empresa:
 ${notasTexto}
 
-Quando o usuário enviar um relatório (extrato bancário, contas a pagar/receber, aplicação financeira etc.), leia o conteúdo com atenção, aplique as observações acima quando forem relevantes, e responda de forma clara e objetiva em português. Se identificar um padrão novo que valeria a pena guardar como observação permanente desta empresa, sugira isso ao usuário explicitamente (mas nunca grave nada sozinho — quem decide é o usuário). Se precisar de mais informação para prosseguir com segurança, pergunte antes de supor.`;
+Histórico de relatórios já processados para esta empresa (mais antigos primeiro — use isso pra responder perguntas sobre documentos enviados antes, mesmo que o arquivo original não esteja anexado agora):
+${documentosTexto}
+
+Quando o usuário enviar um relatório (extrato bancário, contas a pagar/receber, aplicação financeira etc.), leia o conteúdo com atenção, aplique as observações acima quando forem relevantes, e responda de forma clara e objetiva em português — sua resposta é guardada como o resumo permanente desse documento, então inclua os detalhes importantes (período do relatório, principais lançamentos, valores, pendências) diretamente nela, não só uma confirmação genérica. Se identificar um padrão novo que valeria a pena guardar como observação permanente desta empresa, sugira isso ao usuário explicitamente (mas nunca grave nada sozinho — quem decide é o usuário). Se precisar de mais informação para prosseguir com segurança, pergunte antes de supor.`;
 }
 
 exports.assistenteChat = onCall(
@@ -59,6 +68,23 @@ exports.assistenteChat = onCall(
     if (!isAdmin && responsavel && responsavel !== userEmail) {
       throw new HttpsError("permission-denied", "Você não tem acesso a esta empresa.");
     }
+
+    // Histórico de relatórios já processados — vira contexto permanente da IA, independente
+    // do tamanho do chat ou de quando o arquivo original foi enviado.
+    const documentosSnap = await db
+      .collection("assistenteIA_empresas")
+      .doc(empresaId)
+      .collection("documentos")
+      .orderBy("criadoEm", "asc")
+      .limit(200)
+      .get();
+    const documentos = documentosSnap.docs.map((d) => {
+      const data = d.data();
+      const dataTexto = data.criadoEm && data.criadoEm.toDate
+        ? data.criadoEm.toDate().toLocaleDateString("pt-BR")
+        : "";
+      return { arquivos: data.arquivos || [], resumo: data.resumo || "", dataTexto };
+    });
 
     const contentBlocks = [];
     for (const f of files || []) {
@@ -97,7 +123,7 @@ exports.assistenteChat = onCall(
       response = await anthropic.messages.create({
         model: MODEL,
         max_tokens: 4096,
-        system: buildSystemPrompt(empresa.nome, empresa.notas),
+        system: buildSystemPrompt(empresa.nome, empresa.notas, documentos),
         messages,
       });
     } catch (err) {
@@ -109,6 +135,21 @@ exports.assistenteChat = onCall(
       .filter((b) => b.type === "text")
       .map((b) => b.text)
       .join("\n\n");
+
+    // Todo relatório enviado vira uma ficha permanente — é isso que a IA consulta depois,
+    // mesmo que o arquivo original não seja reenviado numa pergunta futura.
+    const fileNames = (files || []).map((f) => f.name).filter(Boolean);
+    if (fileNames.length > 0) {
+      await db
+        .collection("assistenteIA_empresas")
+        .doc(empresaId)
+        .collection("documentos")
+        .add({
+          arquivos: fileNames,
+          resumo: text,
+          criadoEm: FieldValue.serverTimestamp(),
+        });
+    }
 
     return { text, usage: response.usage || null };
   }

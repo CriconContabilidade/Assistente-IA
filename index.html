@@ -415,6 +415,17 @@
     padding: 10px 12px; font-size: 0.83rem; line-height: 1.5; display: flex; justify-content: space-between; gap: 8px; align-items: flex-start;
   }
   .note-item button { background: none; border: none; color: var(--text-faint); cursor: pointer; flex-shrink: 0; }
+
+  .doc-item {
+    background: var(--panel); border: 1px solid var(--panel-border); border-radius: 10px;
+    padding: 12px 14px; font-size: 0.83rem; line-height: 1.5;
+  }
+  .doc-item .doc-header {
+    display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px;
+    font-size: 0.78rem; color: var(--text-dim);
+  }
+  .doc-item .doc-files { font-weight: 600; color: var(--text); }
+  .doc-item .doc-resumo { color: var(--text-dim); white-space: pre-wrap; }
   .note-item button:hover { color: var(--danger); }
   .add-note-row { display: flex; gap: 8px; }
   .add-note-row input {
@@ -497,6 +508,7 @@
         <div class="sub" id="chatSub">Escolha uma empresa na lista ao lado pra começar</div>
       </div>
       <div class="header-actions">
+        <button class="icon-btn" id="openDocsBtn">📁 Histórico de documentos</button>
         <button class="icon-btn" id="openNotesBtn">🧠 O que a IA já sabe</button>
       </div>
     </div>
@@ -544,6 +556,14 @@
     <button id="addNoteBtn">+</button>
   </div>
   <div id="notesList" style="display:flex; flex-direction:column; gap:8px;"></div>
+</div>
+
+<div class="drawer-overlay" id="docsDrawerOverlay"></div>
+<div class="drawer" id="docsDrawer">
+  <button class="close-drawer" id="closeDocsDrawerBtn">✕</button>
+  <h3 id="docsTitle">Histórico de documentos</h3>
+  <p class="hint">Todo relatório enviado nessa empresa fica registrado aqui, com o resumo que a IA gerou na hora — mesmo que a conversa fique muito longa, a IA sempre consulta esse histórico pra responder perguntas sobre documentos antigos.</p>
+  <div id="docsList" style="display:flex; flex-direction:column; gap:10px;"></div>
 </div>
 
 <script type="module">
@@ -1058,6 +1078,56 @@
   }
   document.getElementById('closeDrawerBtn').addEventListener('click', closeDrawer);
   drawerOverlay.addEventListener('click', closeDrawer);
+
+  // ---------------- histórico de documentos ----------------
+  const docsDrawerOverlay = document.getElementById('docsDrawerOverlay');
+  const docsDrawer = document.getElementById('docsDrawer');
+  const docsTitle = document.getElementById('docsTitle');
+  const docsList = document.getElementById('docsList');
+  let unsubDocs = null;
+
+  document.getElementById('openDocsBtn').addEventListener('click', () => {
+    if (!activeEmpresaId) { alert('Selecione uma empresa primeiro.'); return; }
+    const emp = empresas.find(e => e.id === activeEmpresaId);
+    docsTitle.textContent = `Histórico de documentos — ${emp ? emp.nome : ''}`;
+    docsDrawerOverlay.classList.add('show');
+    docsDrawer.classList.add('show');
+    renderDocsList();
+  });
+  function closeDocsDrawer() {
+    docsDrawerOverlay.classList.remove('show');
+    docsDrawer.classList.remove('show');
+    if (unsubDocs) { unsubDocs(); unsubDocs = null; }
+  }
+  document.getElementById('closeDocsDrawerBtn').addEventListener('click', closeDocsDrawer);
+  docsDrawerOverlay.addEventListener('click', closeDocsDrawer);
+
+  function renderDocsList() {
+    if (unsubDocs) unsubDocs();
+    docsList.innerHTML = '<div style="color:var(--text-faint); font-size:0.82rem;">Carregando...</div>';
+    const docsCol = collection(db, "assistenteIA_empresas", activeEmpresaId, "documentos");
+    unsubDocs = onSnapshot(query(docsCol, orderBy("criadoEm", "desc")), snap => {
+      docsList.innerHTML = "";
+      if (snap.empty) {
+        docsList.innerHTML = '<div style="color:var(--text-faint); font-size:0.82rem;">Nenhum documento processado ainda.</div>';
+        return;
+      }
+      snap.forEach(d => {
+        const doc = d.data();
+        const data = doc.criadoEm && doc.criadoEm.toDate ? doc.criadoEm.toDate().toLocaleString('pt-BR') : '';
+        const item = document.createElement('div');
+        item.className = 'doc-item';
+        item.innerHTML = `
+          <div class="doc-header">
+            <span class="doc-files">📄 ${(doc.arquivos || []).join(', ')}</span>
+            <span>${data}</span>
+          </div>
+          <div class="doc-resumo">${(doc.resumo || '').replace(/</g, '&lt;')}</div>
+        `;
+        docsList.appendChild(item);
+      });
+    });
+  }
 
   function renderNotes(emp) {
     notesTitle.textContent = `Aprendizado — ${emp.nome}`;
