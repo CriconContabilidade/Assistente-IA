@@ -553,6 +553,7 @@
     getFirestore, collection, doc, addDoc, setDoc, deleteDoc, updateDoc,
     onSnapshot, query, orderBy, serverTimestamp, arrayUnion
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 
   // Mesmo projeto Firebase do Hub — login já vale automaticamente aqui também.
   const firebaseConfig = {
@@ -568,21 +569,8 @@
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db = getFirestore(app);
-  const WORKER_URL = "https://assistente-ia-cricon.contabilidadecricon.workers.dev";
-  async function assistenteChat(payload) {
-    const idToken = await auth.currentUser.getIdToken();
-    const res = await fetch(WORKER_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${idToken}` },
-      body: JSON.stringify(payload),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const err = new Error(data.error || `Erro ${res.status}`);
-      throw err;
-    }
-    return { data };
-  }
+  const functionsClient = getFunctions(app);
+  const assistenteChat = httpsCallable(functionsClient, 'assistenteChat');
 
   // ---------------- login ----------------
   const loginScreen = document.getElementById('loginScreen');

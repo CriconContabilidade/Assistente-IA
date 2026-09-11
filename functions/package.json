@@ -2,7 +2,7 @@
   "name": "assistente-ia-functions",
   "description": "Backend do Assistente IA — chama a API da Anthropic com segurança (a key nunca fica no navegador)",
   "engines": {
-    "node": "20"
+    "node": "22"
   },
   "main": "index.js",
   "private": true,
