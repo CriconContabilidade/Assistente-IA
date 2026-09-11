@@ -914,19 +914,24 @@
     if (unsubMessages) unsubMessages();
     chatBody.innerHTML = "";
     currentMessages = [];
+    typingActive = false;
     if (!activeEmpresaId) { chatBody.appendChild(emptyState); return; }
     const msgsCol = collection(db, "assistenteIA_empresas", activeEmpresaId, "mensagens");
     unsubMessages = onSnapshot(query(msgsCol, orderBy("criadoEm")), snap => {
       chatBody.innerHTML = "";
       currentMessages = snap.docs.map(d => d.data());
-      if (snap.empty) {
+      if (snap.empty && !typingActive) {
         const es = document.createElement('div');
         es.className = 'empty-state';
         es.innerHTML = `<div class="orb-lg">✨</div><h4>Comece a conversa</h4><p>Anexe um relatório desta empresa ou escreva o que precisa — a IA lê o arquivo de verdade e responde com base no que já sabe sobre ela.</p>`;
         chatBody.appendChild(es);
-        return;
+      } else {
+        snap.forEach(d => chatBody.appendChild(renderMsg(d.data())));
       }
-      snap.forEach(d => chatBody.appendChild(renderMsg(d.data())));
+      // O snapshot do Firestore reconstrói o chat inteiro a cada atualização — se o
+      // indicador de "pensando" estava visível, ele precisa voltar aqui, senão some no meio
+      // da espera (a lista de mensagens costuma atualizar mais de uma vez por envio).
+      if (typingActive) appendTypingIndicator();
       chatBody.scrollTop = chatBody.scrollHeight;
     });
   }
@@ -997,10 +1002,13 @@
     });
   }
 
+  let isSending = false;
+
   async function sendMessage() {
-    if (!activeEmpresaId) return;
+    if (!activeEmpresaId || isSending) return;
     const text = messageInput.value.trim();
     if (!text && pendingFiles.length === 0) return;
+    isSending = true;
 
     let totalBytes = 0;
     for (const f of pendingFiles) {
@@ -1053,6 +1061,7 @@
       const msg = `Não consegui obter resposta da IA (${err && err.message ? err.message : 'erro desconhecido'}). Tente novamente em instantes.`;
       await addDoc(msgsCol, { role: 'assistant', text: `⚠️ ${msg}`, files: [], criadoEm: serverTimestamp() });
     } finally {
+      isSending = false;
       setComposerBusy(false);
     }
   }
@@ -1065,8 +1074,12 @@
   }
 
   let typingTimers = [];
+  let typingActive = false;
+  let typingHasFiles = false;
+  let typingLabelText = 'Pensando...';
 
-  function showTyping(hasFiles) {
+  function appendTypingIndicator() {
+    document.getElementById('typingIndicator')?.remove();
     const t = document.createElement('div');
     t.className = 'msg assistant';
     t.id = 'typingIndicator';
@@ -1074,17 +1087,32 @@
       <div class="msg-avatar">✨</div>
       <div class="msg-bubble">
         <div class="typing"><span></span><span></span><span></span></div>
-        <div class="typing-label" id="typingLabel">${hasFiles ? 'Lendo os arquivos...' : 'Pensando...'}</div>
+        <div class="typing-label" id="typingLabel">${typingLabelText}</div>
       </div>
     `;
     chatBody.appendChild(t);
+  }
+
+  function showTyping(hasFiles) {
+    typingActive = true;
+    typingHasFiles = !!hasFiles;
+    typingLabelText = typingHasFiles ? 'Lendo os arquivos...' : 'Pensando...';
+    appendTypingIndicator();
     chatBody.scrollTop = chatBody.scrollHeight;
 
-    const label = document.getElementById('typingLabel');
-    typingTimers.push(setTimeout(() => { if (label) label.textContent = 'Ainda trabalhando nisso — relatórios grandes demoram mais...'; }, 12000));
-    typingTimers.push(setTimeout(() => { if (label) label.textContent = 'Quase lá, só mais um pouco...'; }, 30000));
+    typingTimers.push(setTimeout(() => {
+      typingLabelText = 'Ainda trabalhando nisso — relatórios grandes demoram mais...';
+      const label = document.getElementById('typingLabel');
+      if (label) label.textContent = typingLabelText;
+    }, 12000));
+    typingTimers.push(setTimeout(() => {
+      typingLabelText = 'Quase lá, só mais um pouco...';
+      const label = document.getElementById('typingLabel');
+      if (label) label.textContent = typingLabelText;
+    }, 30000));
   }
   function hideTyping() {
+    typingActive = false;
     typingTimers.forEach(clearTimeout);
     typingTimers = [];
     document.getElementById('typingIndicator')?.remove();
