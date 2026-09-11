@@ -374,6 +374,32 @@
     display: none; backdrop-filter: blur(2px);
   }
   .drawer-overlay.show { display: block; }
+
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 20;
+    display: none; align-items: center; justify-content: center; backdrop-filter: blur(3px);
+  }
+  .modal-overlay.show { display: flex; }
+  .modal-card {
+    width: 100%; max-width: 380px;
+    background: var(--panel-solid); border: 1px solid var(--panel-border);
+    border-radius: 16px; padding: 24px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  }
+  .modal-card h3 { margin: 0 0 14px; font-size: 1rem; }
+  .modal-card input {
+    width: 100%; padding: 10px 12px; border-radius: 10px;
+    border: 1px solid var(--panel-border); background: rgba(255,255,255,0.03);
+    color: var(--text); font-size: 0.9rem;
+  }
+  .modal-card input:focus { outline: none; border-color: var(--accent2); }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+  .modal-actions button {
+    padding: 9px 16px; border-radius: 9px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+  }
+  .modal-btn-cancel { background: none; border: 1px solid var(--panel-border); color: var(--text-dim); }
+  .modal-btn-cancel:hover { color: var(--text); border-color: var(--text-dim); }
+  .modal-btn-confirm { background: var(--accent-grad); border: none; color: white; }
   .drawer {
     position: fixed; top: 0; right: -400px; width: 380px; height: 100vh; z-index: 6;
     background: var(--panel-solid); border-left: 1px solid var(--panel-border);
@@ -493,6 +519,17 @@
         <button class="composer-btn send-btn" id="sendBtn" disabled>➤</button>
       </div>
       <div class="composer-hint">Arquivos PDF de até 8MB. A IA usa as observações da empresa (aba "🧠 O que a IA já sabe") como contexto.</div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal-card">
+    <h3 id="modalTitle">Título</h3>
+    <input type="text" id="modalInput">
+    <div class="modal-actions">
+      <button class="modal-btn-cancel" id="modalCancelBtn">Cancelar</button>
+      <button class="modal-btn-confirm" id="modalConfirmBtn">Confirmar</button>
     </div>
   </div>
 </div>
@@ -750,8 +787,47 @@
     return "👤 " + emp.responsavelEmail;
   }
 
+  // Modal próprio no lugar de window.prompt() — o prompt() nativo não funciona dentro do
+  // app desktop (Electron), então essa janelinha substitui em todo lugar.
+  const modalOverlay = document.getElementById('modalOverlay');
+  const modalTitle = document.getElementById('modalTitle');
+  const modalInput = document.getElementById('modalInput');
+  const modalConfirmBtn = document.getElementById('modalConfirmBtn');
+  const modalCancelBtn = document.getElementById('modalCancelBtn');
+
+  function showPrompt({ title, placeholder = '', defaultValue = '' }) {
+    return new Promise((resolve) => {
+      modalTitle.textContent = title;
+      modalInput.value = defaultValue;
+      modalInput.placeholder = placeholder;
+      modalOverlay.classList.add('show');
+      setTimeout(() => modalInput.focus(), 0);
+
+      function cleanup(result) {
+        modalOverlay.classList.remove('show');
+        modalConfirmBtn.removeEventListener('click', onConfirm);
+        modalCancelBtn.removeEventListener('click', onCancel);
+        modalInput.removeEventListener('keydown', onKeydown);
+        resolve(result);
+      }
+      function onConfirm() { cleanup(modalInput.value); }
+      function onCancel() { cleanup(null); }
+      function onKeydown(e) {
+        if (e.key === 'Enter') onConfirm();
+        if (e.key === 'Escape') onCancel();
+      }
+      modalConfirmBtn.addEventListener('click', onConfirm);
+      modalCancelBtn.addEventListener('click', onCancel);
+      modalInput.addEventListener('keydown', onKeydown);
+    });
+  }
+
   async function promptAssign(emp) {
-    const val = prompt(`E-mail do responsável por "${emp.nome}" (deixe em branco pra tirar o responsável):`, emp.responsavelEmail || "");
+    const val = await showPrompt({
+      title: `Responsável por "${emp.nome}"`,
+      placeholder: "E-mail do responsável (vazio = sem responsável)",
+      defaultValue: emp.responsavelEmail || ""
+    });
     if (val === null) return;
     await updateDoc(doc(db, "assistenteIA_empresas", emp.id), { responsavelEmail: val.trim() });
   }
@@ -787,7 +863,7 @@
   empresaSearch.addEventListener('input', () => renderEmpresaList(empresaSearch.value));
 
   document.getElementById('newEmpresaBtn').addEventListener('click', async () => {
-    const nome = prompt("Nome da nova empresa:");
+    const nome = await showPrompt({ title: "Nova empresa", placeholder: "Nome da empresa" });
     if (!nome || !nome.trim()) return;
     const docRef = await addDoc(empresasCol, { nome: nome.trim(), notas: [], responsavelEmail: "", criadoEm: serverTimestamp() });
     selectEmpresa(docRef.id);
