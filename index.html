@@ -962,6 +962,7 @@
   sendBtn.addEventListener('click', sendMessage);
 
   const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8MB por arquivo
+  const MAX_TOTAL_BYTES = 20 * 1024 * 1024; // 20MB somando todos os arquivos da mensagem (a API da IA tem teto de 32MB por conversa)
 
   function fileToBase64(file) {
     return new Promise((resolve, reject) => {
@@ -977,11 +978,17 @@
     const text = messageInput.value.trim();
     if (!text && pendingFiles.length === 0) return;
 
+    let totalBytes = 0;
     for (const f of pendingFiles) {
       if (f.size > MAX_FILE_BYTES) {
         alert(`O arquivo "${f.name}" passa de 8MB — envie um arquivo menor.`);
         return;
       }
+      totalBytes += f.size;
+    }
+    if (totalBytes > MAX_TOTAL_BYTES) {
+      alert(`Os arquivos juntos passam de 20MB (${(totalBytes / 1024 / 1024).toFixed(1)}MB). Manda em mensagens separadas.`);
+      return;
     }
 
     const filesToSend = pendingFiles.slice();
