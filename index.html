@@ -244,11 +244,11 @@
   }
   .status-pill {
     display: inline-flex; align-items: center; gap: 6px;
-    font-size: 0.72rem; color: #fbbf24;
-    background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.25);
+    font-size: 0.72rem; color: var(--ok);
+    background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.25);
     padding: 5px 10px; border-radius: 999px; width: fit-content;
   }
-  .status-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: #fbbf24; box-shadow: 0 0 6px #fbbf24; }
+  .status-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
   .user-row { display: flex; align-items: center; justify-content: space-between; font-size: 0.76rem; color: var(--text-dim); }
   .user-row button {
     background: none; border: 1px solid var(--panel-border); color: var(--text-dim);
@@ -456,7 +456,7 @@
     <div class="empresa-list" id="empresaList"></div>
 
     <div class="sidebar-footer">
-      <span class="status-pill"><span class="dot"></span> Modo demonstração — IA ainda não conectada</span>
+      <span class="status-pill"><span class="dot"></span> IA conectada</span>
       <div class="user-row">
         <span id="userEmail"></span>
         <button id="logoutBtn">Sair</button>
@@ -492,7 +492,7 @@
         <textarea id="messageInput" rows="1" placeholder="Envie um relatório ou pergunte algo..." disabled></textarea>
         <button class="composer-btn send-btn" id="sendBtn" disabled>➤</button>
       </div>
-      <div class="composer-hint">Modo demonstração: a IA ainda não está conectada de verdade. As respostas abaixo simulam como a conversa vai funcionar.</div>
+      <div class="composer-hint">Arquivos PDF de até 8MB. A IA usa as observações da empresa (aba "🧠 O que a IA já sabe") como contexto.</div>
     </div>
   </div>
 </div>
@@ -516,6 +516,7 @@
     getFirestore, collection, doc, addDoc, setDoc, deleteDoc, updateDoc,
     onSnapshot, query, orderBy, serverTimestamp, arrayUnion
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 
   // Mesmo projeto Firebase do Hub — login já vale automaticamente aqui também.
   const firebaseConfig = {
@@ -531,6 +532,8 @@
   const app = initializeApp(firebaseConfig);
   const auth = getAuth(app);
   const db = getFirestore(app);
+  const functionsClient = getFunctions(app);
+  const assistenteChat = httpsCallable(functionsClient, 'assistenteChat');
 
   // ---------------- login ----------------
   const loginScreen = document.getElementById('loginScreen');
@@ -792,13 +795,14 @@
 
   let pendingFiles = [];
   let unsubMessages = null;
+  let currentMessages = []; // histórico em memória da empresa ativa, pra mandar como contexto pra IA
 
   function selectEmpresa(id) {
     activeEmpresaId = id;
     const emp = empresas.find(e => e.id === id);
     if (!emp) return;
     chatTitle.textContent = emp.nome;
-    chatSub.textContent = "Modo demonstração — envie um relatório pra ver como vai funcionar";
+    chatSub.textContent = "Envie um relatório (PDF) ou pergunte algo sobre esta empresa";
     messageInput.disabled = false;
     sendBtn.disabled = false;
     renderEmpresaList(empresaSearch.value);
@@ -809,14 +813,16 @@
   function renderMessagesForActive() {
     if (unsubMessages) unsubMessages();
     chatBody.innerHTML = "";
+    currentMessages = [];
     if (!activeEmpresaId) { chatBody.appendChild(emptyState); return; }
     const msgsCol = collection(db, "assistenteIA_empresas", activeEmpresaId, "mensagens");
     unsubMessages = onSnapshot(query(msgsCol, orderBy("criadoEm")), snap => {
       chatBody.innerHTML = "";
+      currentMessages = snap.docs.map(d => d.data());
       if (snap.empty) {
         const es = document.createElement('div');
         es.className = 'empty-state';
-        es.innerHTML = `<div class="orb-lg">✨</div><h4>Comece a conversa</h4><p>Anexe um relatório desta empresa ou escreva o que precisa. As respostas agora são simuladas — quando a IA real estiver conectada, ela vai ler o arquivo de verdade e devolver o TXT pronto.</p>`;
+        es.innerHTML = `<div class="orb-lg">✨</div><h4>Comece a conversa</h4><p>Anexe um relatório desta empresa ou escreva o que precisa — a IA lê o arquivo de verdade e responde com base no que já sabe sobre ela.</p>`;
         chatBody.appendChild(es);
         return;
       }
@@ -879,14 +885,33 @@
   });
   sendBtn.addEventListener('click', sendMessage);
 
+  const MAX_FILE_BYTES = 8 * 1024 * 1024; // 8MB por arquivo
+
+  function fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
   async function sendMessage() {
     if (!activeEmpresaId) return;
     const text = messageInput.value.trim();
     if (!text && pendingFiles.length === 0) return;
 
-    const files = pendingFiles.map(f => f.name);
+    for (const f of pendingFiles) {
+      if (f.size > MAX_FILE_BYTES) {
+        alert(`O arquivo "${f.name}" passa de 8MB — envie um arquivo menor.`);
+        return;
+      }
+    }
+
+    const filesToSend = pendingFiles.slice();
+    const fileNames = filesToSend.map(f => f.name);
     const msgsCol = collection(db, "assistenteIA_empresas", activeEmpresaId, "mensagens");
-    await addDoc(msgsCol, { role: 'user', text, files, criadoEm: serverTimestamp() });
+    await addDoc(msgsCol, { role: 'user', text, files: fileNames, criadoEm: serverTimestamp() });
 
     messageInput.value = "";
     messageInput.style.height = 'auto';
@@ -894,11 +919,34 @@
     renderAttachPreview();
 
     showTyping();
-    setTimeout(async () => {
+    try {
+      const filesBase64 = await Promise.all(filesToSend.map(async f => ({
+        name: f.name,
+        mediaType: f.type || 'application/octet-stream',
+        base64: await fileToBase64(f)
+      })));
+
+      const history = currentMessages
+        .filter(m => m.text && m.text.trim())
+        .map(m => ({ role: m.role, text: m.text }));
+
+      const result = await assistenteChat({
+        empresaId: activeEmpresaId,
+        message: text,
+        history,
+        files: filesBase64
+      });
+
       hideTyping();
-      const reply = demoReply(text, files);
-      await addDoc(msgsCol, { role: 'assistant', text: reply, files: [], criadoEm: serverTimestamp() });
-    }, 1100 + Math.random() * 700);
+      await addDoc(msgsCol, { role: 'assistant', text: result.data.text, files: [], criadoEm: serverTimestamp() });
+    } catch (err) {
+      hideTyping();
+      console.error('Erro chamando a IA:', err);
+      const msg = err && err.code === 'functions/unavailable'
+        ? 'Não consegui falar com a IA agora — o backend ainda pode não estar publicado.'
+        : `Não consegui obter resposta da IA (${err && err.message ? err.message : 'erro desconhecido'}). Tente novamente em instantes.`;
+      await addDoc(msgsCol, { role: 'assistant', text: `⚠️ ${msg}`, files: [], criadoEm: serverTimestamp() });
+    }
   }
 
   function showTyping() {
@@ -910,13 +958,6 @@
     chatBody.scrollTop = chatBody.scrollHeight;
   }
   function hideTyping() { document.getElementById('typingIndicator')?.remove(); }
-
-  function demoReply(text, files) {
-    if (files.length) {
-      return `📄 Recebi <strong>${files.join(', ')}</strong>.<br><br>Isso aqui ainda é uma <strong>resposta de demonstração</strong> — a leitura real do arquivo e a geração do TXT pronto só vão funcionar quando a IA estiver conectada (API key + backend configurados). Quando isso acontecer, é aqui mesmo que o arquivo pronto vai aparecer pra você baixar.`;
-    }
-    return `Essa é uma resposta simulada, só pra você ver o formato da conversa. Quando a IA estiver conectada de verdade, vou ler os relatórios que você enviar, aplicar o que já sei sobre essa empresa (veja em "🧠 O que a IA já sabe") e te devolver o arquivo pronto pra importar.`;
-  }
 
   // ---------------- notes drawer ----------------
   const drawerOverlay = document.getElementById('drawerOverlay');
