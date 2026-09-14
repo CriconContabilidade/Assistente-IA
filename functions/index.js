@@ -197,6 +197,20 @@ exports.assistenteChat = onCall(
       .map((b) => b.text)
       .join("\n\n");
 
+    // Grava a resposta no chat aqui no servidor — não depende do navegador do usuário
+    // continuar aberto até a IA terminar (antes disso, se a pessoa atualizasse a página
+    // antes da resposta voltar, a resposta nunca era salva, mesmo já pronta).
+    await db
+      .collection("assistenteIA_empresas")
+      .doc(empresaId)
+      .collection("mensagens")
+      .add({
+        role: "assistant",
+        text,
+        files: [],
+        criadoEm: FieldValue.serverTimestamp(),
+      });
+
     // Todo relatório enviado vira uma ficha permanente — é isso que a IA consulta depois,
     // mesmo que o arquivo original não seja reenviado numa pergunta futura.
     const fileNames = (files || []).map((f) => f.name).filter(Boolean);

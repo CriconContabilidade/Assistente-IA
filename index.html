@@ -1054,7 +1054,8 @@
       });
 
       hideTyping();
-      await addDoc(msgsCol, { role: 'assistant', text: result.data.text, files: [], criadoEm: serverTimestamp() });
+      // A própria função já grava a resposta no Firestore (veja o comentário no backend) —
+      // não grava de novo aqui, só espera o onSnapshot trazer ela.
     } catch (err) {
       hideTyping();
       console.error('Erro chamando a IA:', err);
