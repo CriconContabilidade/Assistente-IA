@@ -182,7 +182,7 @@ exports.assistenteChat = onCall(
     try {
       response = await anthropic.messages.create({
         model: MODEL,
-        max_tokens: 4096,
+        max_tokens: 16000,
         system: buildSystemPrompt(empresa.nome, empresa.notas, documentos),
         messages,
       });
@@ -192,10 +192,17 @@ exports.assistenteChat = onCall(
     }
     log("resposta da Anthropic recebida");
 
-    const text = response.content
+    let text = response.content
       .filter((b) => b.type === "text")
       .map((b) => b.text)
       .join("\n\n");
+
+    if (!text.trim()) {
+      console.error("Resposta da IA veio sem texto. stop_reason:", response.stop_reason, "usage:", JSON.stringify(response.usage));
+      text = response.stop_reason === "max_tokens"
+        ? "⚠️ O relatório é grande demais — a IA gastou todo o espaço de resposta só pensando, sem sobrar texto. Tenta dividir o pedido em partes menores."
+        : "⚠️ A IA não retornou texto dessa vez (sem erro aparente). Tente reformular a pergunta ou tente novamente.";
+    }
 
     // Grava a resposta no chat aqui no servidor — não depende do navegador do usuário
     // continuar aberto até a IA terminar (antes disso, se a pessoa atualizasse a página
