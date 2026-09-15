@@ -322,6 +322,13 @@
     border-radius: 8px; padding: 5px 10px; font-size: 0.78rem; margin-top: 8px; color: var(--text-dim);
   }
   .msg-bubble strong { color: var(--text); }
+  .download-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--accent-grad); border: none; color: white;
+    border-radius: 8px; padding: 8px 14px; font-size: 0.82rem; font-weight: 700;
+    margin-top: 10px; cursor: pointer; box-shadow: 0 0 16px rgba(139,92,246,0.25);
+  }
+  .download-chip:hover { filter: brightness(1.08); }
 
   .typing { display: flex; gap: 4px; padding: 4px 0; }
   .typing span {
@@ -881,10 +888,10 @@
 * Plano de Contas
 * Relatório Diário do mês anterior (caso já tenha algum mês lançado)
 * Extrato de Aplicação (se a empresa tiver)
-* Contas a Receber
-* Contas a Pagar
+* Contas a Receber (se a empresa tiver)
+* Contas a Pagar (se a empresa tiver)
 
-Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perguntar que informo o caminho correto.`;
+Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perguntar que informo o caminho certinho, com print de tela.`;
   }
 
   document.getElementById('newEmpresaBtn').addEventListener('click', async () => {
@@ -956,11 +963,34 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const wrap = document.createElement('div');
     wrap.className = 'msg ' + (m.role === 'user' ? 'user' : 'assistant');
     const filesHtml = (m.files || []).map(f => `<div class="file-chip">📄 ${f}</div>`).join('');
+    const temArquivo = m.arquivoGerado && m.arquivoGerado.nome && m.arquivoGerado.base64;
+    const arquivoHtml = temArquivo
+      ? `<button class="download-chip" type="button">⬇️ Baixar ${m.arquivoGerado.nome}</button>`
+      : '';
     wrap.innerHTML = `
       <div class="msg-avatar">${m.role === 'user' ? '🧑‍💼' : '✨'}</div>
-      <div class="msg-bubble">${m.text ? m.text.replace(/\n/g, '<br>') : ''}${filesHtml}</div>
+      <div class="msg-bubble">${m.text ? m.text.replace(/\n/g, '<br>') : ''}${filesHtml}${arquivoHtml}</div>
     `;
+    if (temArquivo) {
+      wrap.querySelector('.download-chip').addEventListener('click', () => {
+        downloadArquivoGerado(m.arquivoGerado.nome, m.arquivoGerado.base64);
+      });
+    }
     return wrap;
+  }
+
+  function downloadArquivoGerado(nome, base64) {
+    const byteChars = atob(base64);
+    const bytes = new Uint8Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i++) bytes[i] = byteChars.charCodeAt(i);
+    const blob = new Blob([bytes], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = nome;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
   }
 
   attachBtn.addEventListener('click', () => fileInput.click());
