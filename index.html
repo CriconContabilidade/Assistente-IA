@@ -323,12 +323,18 @@
   }
   .msg-bubble strong { color: var(--text); }
   .download-chip {
-    display: inline-flex; align-items: center; gap: 6px;
+    display: inline-flex; align-items: center; gap: 10px;
     background: var(--accent-grad); border: none; color: white;
-    border-radius: 8px; padding: 8px 14px; font-size: 0.82rem; font-weight: 700;
-    margin-top: 10px; cursor: pointer; box-shadow: 0 0 16px rgba(139,92,246,0.25);
+    border-radius: 999px; padding: 6px 6px 6px 16px; font-size: 0.82rem; font-weight: 700;
+    margin-top: 10px; margin-right: 8px; cursor: pointer; box-shadow: 0 0 16px rgba(139,92,246,0.25);
   }
   .download-chip:hover { filter: brightness(1.08); }
+  .download-chip .download-chip-icon {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 26px; height: 26px; border-radius: 50%;
+    background: rgba(255,255,255,0.22); flex-shrink: 0;
+  }
+  .download-chip .download-chip-icon svg { width: 14px; height: 14px; }
 
   .typing { display: flex; gap: 4px; padding: 4px 0; }
   .typing span {
@@ -966,8 +972,9 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     // arquivosGerados é uma lista porque uma mesma resposta pode gerar mais de um arquivo
     // de importação (ex.: baixa de saídas + baixa de entradas + lançamentos de uma vez).
     const arquivosGerados = (m.arquivosGerados || []).filter(a => a && a.nome && a.base64);
+    const downloadIconSvg = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
     const arquivosHtml = arquivosGerados
-      .map((a, i) => `<button class="download-chip" type="button" data-idx="${i}">⬇️ Baixar ${a.nome}</button>`)
+      .map((a, i) => `<button class="download-chip" type="button" data-idx="${i}">Baixar ${a.nome}<span class="download-chip-icon">${downloadIconSvg}</span></button>`)
       .join('');
     wrap.innerHTML = `
       <div class="msg-avatar">${m.role === 'user' ? '🧑‍💼' : '✨'}</div>
