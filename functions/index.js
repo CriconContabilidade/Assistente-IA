@@ -189,6 +189,14 @@ function fmtValorTxt(n) {
   return r.toFixed(2).replace(".", ",");
 }
 
+// Igual ao fmtValorTxt, mas para campos que o Domínio aceita em branco: sem valor continua
+// em branco em vez de virar "0". O que não pode é sair com ponto — o Domínio recusa a linha
+// ("O campo decimal ... contém caracteres inválidos").
+function fmtValorOpcionalTxt(n) {
+  if (n === null || n === undefined || n === "" || isNaN(n)) return "";
+  return fmtValorTxt(n);
+}
+
 function stripAccentsJs(s) {
   return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "");
 }
@@ -266,21 +274,21 @@ function buildServicoPrestLines(linhas) {
     l.cfps ?? 9101,
     fmtValorTxt(l.valorServicos || 0),
     fmtValorTxt(l.valorDescontos || 0),
-    l.valorDeducao ?? "",
+    fmtValorOpcionalTxt(l.valorDeducao),
     fmtValorTxt(l.valorContabil ?? l.valorServicos ?? 0),
-    l.baseCalculo ?? "",
-    l.aliquotaIss ?? "",
-    l.valorIssNormal ?? "",
-    l.valorIssRetido ?? "",
-    l.valorIrrf ?? "",
-    l.valorPis ?? "",
-    l.valorCofins ?? "",
-    l.valorCsll ?? "",
-    l.valorCrf ?? "",
-    l.valorInss ?? "",
+    fmtValorOpcionalTxt(l.baseCalculo),
+    fmtValorOpcionalTxt(l.aliquotaIss),
+    fmtValorOpcionalTxt(l.valorIssNormal),
+    fmtValorOpcionalTxt(l.valorIssRetido),
+    fmtValorOpcionalTxt(l.valorIrrf),
+    fmtValorOpcionalTxt(l.valorPis),
+    fmtValorOpcionalTxt(l.valorCofins),
+    fmtValorOpcionalTxt(l.valorCsll),
+    fmtValorOpcionalTxt(l.valorCrf),
+    fmtValorOpcionalTxt(l.valorInss),
     l.codigoItem ?? "",
-    l.quantidade ?? "",
-    l.valorUnitario ?? "",
+    fmtValorOpcionalTxt(l.quantidade),
+    fmtValorOpcionalTxt(l.valorUnitario),
   ].join(";"));
 }
 
@@ -396,7 +404,8 @@ Quando o usuário escolher um (pelo número ou nome), na sua PRÓXIMA resposta: 
 - Baixa de Entradas: {"tipo":"baixa_ent","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0}]}
 - Baixa de Saídas: {"tipo":"baixa_sai","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0,"pis":0,"cofins":0,"csll":0,"irrf":0}]}
 - Baixa de Serviços: mesmo formato de Baixa de Saídas, com "tipo":"baixa_ser"
-- Nota Fiscal de Serviço: {"tipo":"servico_prest","linhas":[{"cnpj":"","razaoSocial":"","uf":"","municipio":"","endereco":"","numeroDocumento":"","serie":"U","data":"DD/MM/AAAA","situacao":0,"acumulador":1,"cfps":9101,"valorServicos":0,"valorDescontos":0,"valorContabil":0}]}
+- Nota Fiscal de Serviço: {"tipo":"servico_prest","linhas":[{"cnpj":"","razaoSocial":"","uf":"","municipio":"","endereco":"","numeroDocumento":"","serie":"U","data":"DD/MM/AAAA","situacao":0,"acumulador":1,"cfps":9101,"valorServicos":0,"valorDescontos":0,"valorContabil":0,"baseCalculo":0,"valorIrrf":0}]}
+  Campos opcionais de imposto dessa nota, use quando houver retenção: "baseCalculo", "valorIrrf", "valorPis", "valorCofins", "valorCsll", "valorInss", "valorIssRetido", "aliquotaIss". Deixe de fora os que não se aplicam. Na NF de rendimento de aplicação financeira o IRRF é obrigatório: vai em "valorIrrf", com o rendimento em "valorServicos"/"valorContabil". Mande todo valor como número puro (8.44, nunca "8,44" nem "R$ 8,44") — a formatação que o Domínio exige é feita automaticamente.
 
 Depois de gerar um arquivo, se ainda houver outros tipos pendentes, ofereça a lista de novo (menos o que já foi gerado).
 
