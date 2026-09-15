@@ -212,8 +212,11 @@ function campoTxt(valor, nome, obrigatorio = false) {
   return texto;
 }
 
-function dataTxt(valor, nome) {
-  const texto = campoTxt(valor, nome, true);
+// obrigatorio=false permite data em branco (ex.: vencimento de baixa, que nem sempre existe);
+// o que não se aceita é data preenchida em formato errado ou inexistente no calendário.
+function dataTxt(valor, nome, obrigatorio = true) {
+  const texto = campoTxt(valor, nome, obrigatorio);
+  if (!texto) return "";
   if (!/^\d{2}\/\d{2}\/\d{4}$/.test(texto)) throw new Error(`Data inválida em "${nome}": ${texto}`);
   const [dia, mes, ano] = texto.split("/").map(Number);
   const data = new Date(Date.UTC(ano, mes - 1, dia));
@@ -223,8 +226,14 @@ function dataTxt(valor, nome) {
   return texto;
 }
 
-function documentoTxt(valor, nome = "CNPJ/CPF") {
+// Em branco é válido quando o campo não é obrigatório: nas baixas o título já é identificado
+// pelo número, e é comum o CNPJ vir vazio. Se vier preenchido, aí sim tem que estar certo.
+function documentoTxt(valor, nome = "CNPJ/CPF", obrigatorio = false) {
   const digits = String(valor ?? "").replace(/\D/g, "");
+  if (!digits) {
+    if (obrigatorio) throw new Error(`Campo obrigatório ausente: ${nome}`);
+    return "";
+  }
   if (digits.length !== 11 && digits.length !== 14) {
     throw new Error(`${nome} deve ter 11 ou 14 dígitos`);
   }
@@ -274,7 +283,7 @@ function buildBaixaLines(linhas, tipo) {
     const base = [
       campoTxt(l.numero, `número do título da linha ${index + 1}`, true),
       documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`),
-      dataTxt(l.vencimento, `vencimento da linha ${index + 1}`),
+      dataTxt(l.vencimento, `vencimento da linha ${index + 1}`, false),
       dataTxt(l.databaixa, `data da baixa da linha ${index + 1}`),
       fmtValorTxt(l.valor),
       fmtValorTxt(l.juros || 0),
@@ -295,10 +304,14 @@ function buildBaixaLines(linhas, tipo) {
 
 function buildServicoPrestLines(linhas) {
   return linhas.map((l, index) => [
-    documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`),
-    campoTxt(stripAccentsJs(l.razaoSocial || ""), `razão social da linha ${index + 1}`, true),
-    campoTxt(l.uf, `UF da linha ${index + 1}`, true),
-    campoTxt(stripAccentsJs(l.municipio || ""), `município da linha ${index + 1}`, true),
+    documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`, true),
+    // Razão social, UF e município NÃO são obrigatórios: o cliente já existe no cadastro do
+    // Domínio e o CNPJ sozinho o identifica. Preenchidos, o Domínio tenta validar/atualizar o
+    // cadastro e recusa o arquivo ("Município do cliente inválido"). Bari e Mantovani, que
+    // importam esse mesmo layout há tempos, deixam os três em branco.
+    campoTxt(stripAccentsJs(l.razaoSocial || ""), `razão social da linha ${index + 1}`),
+    campoTxt(l.uf, `UF da linha ${index + 1}`),
+    campoTxt(stripAccentsJs(l.municipio || ""), `município da linha ${index + 1}`),
     campoTxt(stripAccentsJs(l.endereco || ""), `endereço da linha ${index + 1}`),
     campoTxt(l.numeroDocumento, `número do documento da linha ${index + 1}`, true),
     campoTxt(l.serie || "U", `série da linha ${index + 1}`, true),
