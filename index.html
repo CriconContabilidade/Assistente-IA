@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Stagiario — Cricon</title>
 <link rel="icon" type="image/png" href="assets/logo-icone.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@700;800&display=swap" rel="stylesheet">
 <style>
   :root {
     --bg-deep: #02040c;
@@ -140,24 +143,36 @@
   }
   /* a logo é navy e dourada: sobre o fundo escuro ela se resolve sozinha, sem a caixa de
      gradiente que o emoji precisava — só o brilho, pra não ficar chapada */
+  /* o contorno preto é feito com drop-shadow em quatro direções em vez de ser embutido no
+     PNG: assim ele sai com a mesma espessura nos três tamanhos em que a logo aparece */
+  .contorno-logo {
+    filter:
+      drop-shadow(1.5px 0 0 #05070f) drop-shadow(-1.5px 0 0 #05070f)
+      drop-shadow(0 1.5px 0 #05070f) drop-shadow(0 -1.5px 0 #05070f)
+      drop-shadow(0 0 20px rgba(234,179,8,0.3));
+  }
   .brand .orb {
     width: 84px; height: 84px;
     object-fit: contain;
     margin-bottom: 12px;
-    filter: drop-shadow(0 0 22px rgba(234,179,8,0.35));
   }
+  /* o nome usa a paleta da própria logo — branco com o "IA" dourado — em vez do gradiente
+     azul do resto da interface, que brigava com o dourado do símbolo */
   .brand h1 {
-    font-size: 1.25rem; margin: 0 0 2px;
-    background: var(--accent-grad);
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-    font-weight: 800; letter-spacing: 0.01em;
+    font-size: 1.2rem; margin: 0 0 4px;
+    font-family: "Orbitron", -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    color: #f4f7ff; font-weight: 800; letter-spacing: 0.02em;
   }
-  /* o "IA" no meio de Stagiario é de Inteligência Artificial — sai no dourado da logo, e
-     precisa do text-fill-color próprio pra escapar do gradiente recortado do h1 */
+  /* paint-order manda o contorno ser pintado ATRÁS do preenchimento — sem isso o traço
+     avança pra dentro da letra e afina o desenho dela */
+  .contorno-texto {
+    -webkit-text-stroke: 3px #05070f;
+    paint-order: stroke fill;
+  }
+  /* o "IA" no meio de Stagiario é de Inteligência Artificial, por isso o destaque */
   .ia {
     color: #f2c14e;
-    -webkit-text-fill-color: #f2c14e;
-    text-shadow: 0 0 14px rgba(242,193,78,0.55);
+    text-shadow: 0 0 16px rgba(242,193,78,0.6);
   }
   .brand p { margin: 0; font-size: 0.8rem; color: var(--text-dim); }
 
@@ -201,9 +216,12 @@
   .sidebar-header .orb {
     width: 38px; height: 38px;
     object-fit: contain; flex-shrink: 0;
-    filter: drop-shadow(0 0 14px rgba(234,179,8,0.3));
   }
-  .sidebar-header .titles h2 { margin: 0; font-size: 0.98rem; font-weight: 800; }
+  .sidebar-header .titles h2 {
+    margin: 0; font-size: 0.86rem; font-weight: 800;
+    font-family: "Orbitron", -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    letter-spacing: 0.02em;
+  }
   .sidebar-header .titles p { margin: 0; font-size: 0.72rem; color: var(--text-dim); }
 
   .search-box {
@@ -301,10 +319,21 @@
     animation: pulseGlow 3s ease-in-out infinite;
   }
   /* drop-shadow em vez de box-shadow: a logo é um PNG recortado, então o brilho tem que
-     seguir o desenho e não a caixa do elemento */
+     seguir o desenho e não a caixa do elemento. O contorno vem junto aqui porque a animação
+     controla a propriedade filter inteira e apagaria o contorno da classe. */
   @keyframes pulseGlow {
-    0%, 100% { filter: drop-shadow(0 0 14px rgba(234,179,8,0.3)); }
-    50% { filter: drop-shadow(0 0 26px rgba(234,179,8,0.5)); }
+    0%, 100% {
+      filter:
+        drop-shadow(1.5px 0 0 #05070f) drop-shadow(-1.5px 0 0 #05070f)
+        drop-shadow(0 1.5px 0 #05070f) drop-shadow(0 -1.5px 0 #05070f)
+        drop-shadow(0 0 14px rgba(234,179,8,0.3));
+    }
+    50% {
+      filter:
+        drop-shadow(1.5px 0 0 #05070f) drop-shadow(-1.5px 0 0 #05070f)
+        drop-shadow(0 1.5px 0 #05070f) drop-shadow(0 -1.5px 0 #05070f)
+        drop-shadow(0 0 26px rgba(234,179,8,0.5));
+    }
   }
   .empty-state h4 { color: var(--text); margin: 0 0 8px; font-size: 1.05rem; }
   .empty-state p { font-size: 0.85rem; line-height: 1.5; margin: 0; }
@@ -478,8 +507,8 @@
 <div id="loginScreen">
   <div class="login-card">
     <div class="brand">
-      <img class="orb" src="assets/logo-simbolo-claro.png" alt="Stagiario">
-      <h1>Stag<span class="ia">IA</span>rio</h1>
+      <img class="orb contorno-logo" src="assets/logo-simbolo-claro.png" alt="Stagiario">
+      <h1 class="contorno-texto">Stag<span class="ia">IA</span>rio</h1>
       <p>Seu estagiário digital · Contabilidade Cricon</p>
     </div>
     <form id="loginForm">
@@ -505,9 +534,9 @@
 <div id="app">
   <aside class="sidebar">
     <div class="sidebar-header">
-      <img class="orb" src="assets/logo-simbolo-claro.png" alt="Stagiario">
+      <img class="orb contorno-logo" src="assets/logo-simbolo-claro.png" alt="Stagiario">
       <div class="titles">
-        <h2>Stag<span class="ia">IA</span>rio</h2>
+        <h2 class="contorno-texto">Stag<span class="ia">IA</span>rio</h2>
         <p>Conversões por empresa</p>
       </div>
     </div>
@@ -540,7 +569,7 @@
 
     <div class="chat-body" id="chatBody">
       <div class="empty-state" id="emptyState">
-        <img class="orb-lg" src="assets/logo-simbolo-claro.png" alt="Stagiario">
+        <img class="orb-lg contorno-logo" src="assets/logo-simbolo-claro.png" alt="Stagiario">
         <h4>Escolha ou crie uma empresa</h4>
         <p>Cada empresa tem sua própria conversa e seu próprio "aprendizado" — os padrões e observações que você ensinar ficam guardados só pra ela.</p>
       </div>
@@ -968,7 +997,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       if (snap.empty && !typingActive) {
         const es = document.createElement('div');
         es.className = 'empty-state';
-        es.innerHTML = `<img class="orb-lg" src="assets/logo-simbolo-claro.png" alt="Stagiario"><h4>Comece a conversa</h4><p>Anexe um relatório desta empresa ou escreva o que precisa — a IA lê o arquivo de verdade e responde com base no que já sabe sobre ela.</p>`;
+        es.innerHTML = `<img class="orb-lg contorno-logo" src="assets/logo-simbolo-claro.png" alt="Stagiario"><h4>Comece a conversa</h4><p>Anexe um relatório desta empresa ou escreva o que precisa — a IA lê o arquivo de verdade e responde com base no que já sabe sobre ela.</p>`;
         chatBody.appendChild(es);
       } else {
         snap.forEach(d => chatBody.appendChild(renderMsg(d.data())));
