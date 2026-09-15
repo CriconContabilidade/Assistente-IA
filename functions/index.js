@@ -523,9 +523,15 @@ exports.assistenteChat = onCall(
         }
       }
       if (jsonEnd === -1) break; // JSON não fechou (resposta cortada) — para de procurar
-      if (text.slice(jsonEnd, jsonEnd + 2) === "}}") {
+      {
+        // O JSON já está delimitado com segurança pela contagem de chaves, então as "}}" que
+        // fecham a tag são opcionais aqui: a IA às vezes escreve uma chave a menos no fim e,
+        // se exigíssemos exatamente "}}", a tag inteira era ignorada em silêncio (sem botão
+        // de download e sem erro no log). Consome de 0 a 2 chaves de fechamento, o que houver.
+        let tagEnd = jsonEnd;
+        while (tagEnd < text.length && tagEnd < jsonEnd + 2 && text[tagEnd] === "}") tagEnd++;
         const rawJson = text.slice(jsonStart, jsonEnd);
-        const fullTag = text.slice(tagStart, jsonEnd + 2);
+        const fullTag = text.slice(tagStart, tagEnd);
         text = text.replace(fullTag, "").trim();
         try {
           const spec = JSON.parse(rawJson);
@@ -537,8 +543,6 @@ exports.assistenteChat = onCall(
         // texto mudou de tamanho (tag removida) — recomeça a busca do zero em vez de usar
         // um índice que não é mais válido
         searchFrom = 0;
-      } else {
-        searchFrom = jsonEnd; // não era o fechamento certo, continua procurando depois dele
       }
     }
 
