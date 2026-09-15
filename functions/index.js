@@ -496,14 +496,17 @@ exports.assistenteChat = onCall(
       }
     }
 
-    // Troca a tag {{GERAR_ARQUIVO:{...}}} (se a IA decidiu que os lançamentos já estão
-    // prontos) pelo arquivo de importação de verdade, no formato exato que o Domínio aceita.
-    // Usa contagem de chaves em vez de regex não-gulosa — não depende da tag estar no fim do
-    // texto nem da ordem em que outras tags (IMG, CHECK_ENTIDADES) foram processadas antes.
-    let arquivoGerado = null;
-    const tagStart = text.indexOf("{{GERAR_ARQUIVO:");
-    if (tagStart !== -1) {
-      const jsonStart = tagStart + "{{GERAR_ARQUIVO:".length;
+    // Troca cada tag {{GERAR_ARQUIVO:{...}}} (a IA pode incluir mais de uma na mesma resposta,
+    // ex. quando o usuário pede vários arquivos de uma vez) pelo arquivo de importação de
+    // verdade, no formato exato que o Domínio aceita. Usa contagem de chaves em vez de regex
+    // não-gulosa — não depende da tag estar no fim do texto nem da ordem de outras tags.
+    const arquivosGerados = [];
+    const MARKER = "{{GERAR_ARQUIVO:";
+    let searchFrom = 0;
+    while (true) {
+      const tagStart = text.indexOf(MARKER, searchFrom);
+      if (tagStart === -1) break;
+      const jsonStart = tagStart + MARKER.length;
       let depth = 0, jsonEnd = -1;
       for (let i = jsonStart; i < text.length; i++) {
         if (text[i] === "{") depth++;
@@ -512,16 +515,23 @@ exports.assistenteChat = onCall(
           if (depth === 0) { jsonEnd = i + 1; break; }
         }
       }
-      if (jsonEnd !== -1 && text.slice(jsonEnd, jsonEnd + 2) === "}}") {
+      if (jsonEnd === -1) break; // JSON não fechou (resposta cortada) — para de procurar
+      if (text.slice(jsonEnd, jsonEnd + 2) === "}}") {
         const rawJson = text.slice(jsonStart, jsonEnd);
         const fullTag = text.slice(tagStart, jsonEnd + 2);
         text = text.replace(fullTag, "").trim();
         try {
           const spec = JSON.parse(rawJson);
-          arquivoGerado = buildArquivoGerado(spec);
+          const arquivo = buildArquivoGerado(spec);
+          if (arquivo) arquivosGerados.push(arquivo);
         } catch (err) {
           console.error("Erro processando GERAR_ARQUIVO:", err, rawJson);
         }
+        // texto mudou de tamanho (tag removida) — recomeça a busca do zero em vez de usar
+        // um índice que não é mais válido
+        searchFrom = 0;
+      } else {
+        searchFrom = jsonEnd; // não era o fechamento certo, continua procurando depois dele
       }
     }
 
@@ -536,7 +546,7 @@ exports.assistenteChat = onCall(
         role: "assistant",
         text,
         files: [],
-        arquivoGerado: arquivoGerado || null,
+        arquivosGerados: arquivosGerados,
         criadoEm: FieldValue.serverTimestamp(),
       });
 
@@ -556,6 +566,6 @@ exports.assistenteChat = onCall(
     }
     log("finalizado");
 
-    return { text, usage: response.usage || null, arquivoGerado };
+    return { text, usage: response.usage || null, arquivosGerados };
   }
 );
