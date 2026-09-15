@@ -374,6 +374,50 @@
   }
   .download-chip .download-chip-icon svg { width: 14px; height: 14px; }
 
+  /* ---------- painel do fechamento ---------- */
+  .painel-fechamento {
+    padding: 12px 26px 14px;
+    border-bottom: 1px solid var(--panel-border);
+    background: rgba(255,255,255,0.015);
+  }
+  .painel-linha { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .painel-competencia {
+    font-family: "Orbitron", -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    font-size: 0.78rem; font-weight: 700; letter-spacing: 0.04em; color: var(--text);
+    white-space: nowrap;
+  }
+  .painel-barra {
+    flex: 1; height: 5px; border-radius: 99px;
+    background: rgba(255,255,255,0.07); overflow: hidden;
+  }
+  .painel-barra i {
+    display: block; height: 100%; border-radius: 99px;
+    background: var(--accent-grad); transition: width .4s ease;
+  }
+  .painel-pct { font-size: 0.72rem; color: var(--text-dim); white-space: nowrap; }
+  .painel-cartoes { display: flex; flex-wrap: wrap; gap: 6px; }
+  .cartao-rel {
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid var(--panel-border); border-radius: 8px;
+    padding: 4px 9px; font-size: 0.72rem; color: var(--text-faint);
+    background: rgba(255,255,255,0.02);
+  }
+  /* recebido acende; faltando fica apagado — é o "o que já mandei e o que falta" */
+  .cartao-rel.ok {
+    color: var(--text); border-color: rgba(52,211,153,0.35);
+    background: rgba(52,211,153,0.08);
+  }
+  .cartao-rel .marca { font-size: 0.7rem; }
+  .cartao-rel.ok .marca { color: var(--ok); }
+  .painel-pendencias {
+    display: inline-flex; align-items: center; gap: 6px;
+    border-radius: 8px; padding: 4px 9px; font-size: 0.72rem; font-weight: 600;
+    background: rgba(242,193,78,0.12); color: #f2c14e; border: 1px solid rgba(242,193,78,0.3);
+  }
+  .painel-pendencias.zerado {
+    background: rgba(52,211,153,0.1); color: var(--ok); border-color: rgba(52,211,153,0.3);
+  }
+
   /* ---------- grade de conferência do arquivo gerado ---------- */
   .conferencia {
     margin-top: 12px;
@@ -603,6 +647,9 @@
       </div>
     </div>
 
+    <!-- painel do fechamento: some quando a empresa ainda não tem competência em andamento -->
+    <div class="painel-fechamento" id="painelFechamento" hidden></div>
+
     <div class="chat-body" id="chatBody">
       <div class="empty-state" id="emptyState">
         <img class="orb-lg contorno-logo" src="assets/logo-simbolo-claro.png" alt="Stagiario">
@@ -677,7 +724,7 @@
   import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import {
     getFirestore, collection, doc, addDoc, setDoc, deleteDoc, updateDoc,
-    onSnapshot, query, orderBy, serverTimestamp, arrayUnion
+    onSnapshot, query, orderBy, serverTimestamp, arrayUnion, limit
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 
@@ -1080,6 +1127,95 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     renderEmpresaList(empresaSearch.value);
     renderNotes(emp);
     renderMessagesForActive();
+    ouvirFechamento();
+  }
+
+  // Mesma lista do backend, na ordem em que os relatórios costumam ser pedidos
+  const RELATORIOS_FECHAMENTO = [
+    { id: 'extrato', nome: 'Extrato Bancário' },
+    { id: 'aplicacao', nome: 'Extrato de Aplicação' },
+    { id: 'diario', nome: 'Diário' },
+    { id: 'plano_contas', nome: 'Plano de Contas' },
+    { id: 'contas_pagar', nome: 'Contas a Pagar' },
+    { id: 'contas_receber', nome: 'Contas a Receber' },
+  ];
+  const painelFechamento = document.getElementById('painelFechamento');
+  let unsubFechamento = null;
+
+  function renderPainelFechamento(dados) {
+    painelFechamento.textContent = '';
+    if (!dados || !dados.competencia) { painelFechamento.hidden = true; return; }
+    painelFechamento.hidden = false;
+
+    const recebidos = new Set(Array.isArray(dados.relatorios) ? dados.relatorios : []);
+    const arquivos = Array.isArray(dados.arquivos) ? dados.arquivos : [];
+    // o progresso conta os relatórios recebidos e mais um passo pelos arquivos gerados,
+    // que é o que de fato encerra o fechamento
+    const total = RELATORIOS_FECHAMENTO.length + 1;
+    const feitos = recebidos.size + (arquivos.length > 0 ? 1 : 0);
+    const pct = Math.round((feitos / total) * 100);
+
+    const linha = document.createElement('div');
+    linha.className = 'painel-linha';
+    const titulo = document.createElement('div');
+    titulo.className = 'painel-competencia';
+    titulo.textContent = `FECHAMENTO ${String(dados.competencia)}`;
+    const barra = document.createElement('div');
+    barra.className = 'painel-barra';
+    const preenchida = document.createElement('i');
+    preenchida.style.width = `${pct}%`;
+    barra.appendChild(preenchida);
+    const pctTxt = document.createElement('div');
+    pctTxt.className = 'painel-pct';
+    pctTxt.textContent = `${pct}%`;
+    linha.append(titulo, barra, pctTxt);
+
+    const cartoes = document.createElement('div');
+    cartoes.className = 'painel-cartoes';
+    RELATORIOS_FECHAMENTO.forEach((rel) => {
+      const c = document.createElement('div');
+      const ok = recebidos.has(rel.id);
+      c.className = 'cartao-rel' + (ok ? ' ok' : '');
+      const marca = document.createElement('span');
+      marca.className = 'marca';
+      marca.textContent = ok ? '✓' : '○';
+      c.append(marca, document.createTextNode(rel.nome));
+      cartoes.appendChild(c);
+    });
+
+    if (typeof dados.pendencias === 'number') {
+      const p = document.createElement('div');
+      p.className = 'painel-pendencias' + (dados.pendencias === 0 ? ' zerado' : '');
+      p.textContent = dados.pendencias === 0
+        ? '✓ sem pendências'
+        : `${dados.pendencias} ${dados.pendencias === 1 ? 'pendência' : 'pendências'}`;
+      cartoes.appendChild(p);
+    }
+    if (arquivos.length > 0) {
+      const a = document.createElement('div');
+      a.className = 'cartao-rel ok';
+      const marca = document.createElement('span');
+      marca.className = 'marca';
+      marca.textContent = '✓';
+      a.append(marca, document.createTextNode(`${arquivos.length} ${arquivos.length === 1 ? 'arquivo gerado' : 'arquivos gerados'}`));
+      cartoes.appendChild(a);
+    }
+
+    painelFechamento.append(linha, cartoes);
+  }
+
+  function ouvirFechamento() {
+    if (unsubFechamento) { unsubFechamento(); unsubFechamento = null; }
+    renderPainelFechamento(null);
+    if (!activeEmpresaId) return;
+    // competência mais recente primeiro — o id é "AAAA-MM", então ordenar por nome basta
+    const col = collection(db, "assistenteIA_empresas", activeEmpresaId, "fechamentos");
+    unsubFechamento = onSnapshot(query(col, orderBy("__name__", "desc"), limit(1)), (snap) => {
+      renderPainelFechamento(snap.empty ? null : snap.docs[0].data());
+    }, (err) => {
+      console.error('Erro ouvindo fechamento:', err);
+      renderPainelFechamento(null);
+    });
   }
 
   function renderMessagesForActive() {
