@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Assistente IA — Cricon</title>
+<title>Stagiario — Cricon</title>
+<link rel="icon" type="image/png" href="assets/logo-icone.png">
 <style>
   :root {
     --bg-deep: #02040c;
@@ -137,13 +138,13 @@
     display: flex; flex-direction: column; align-items: center;
     margin-bottom: 24px;
   }
+  /* a logo é navy e dourada: sobre o fundo escuro ela se resolve sozinha, sem a caixa de
+     gradiente que o emoji precisava — só o brilho, pra não ficar chapada */
   .brand .orb {
-    width: 54px; height: 54px; border-radius: 16px;
-    background: var(--accent-grad);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 26px;
-    box-shadow: 0 0 32px rgba(139,92,246,0.45);
+    width: 84px; height: 84px;
+    object-fit: contain;
     margin-bottom: 12px;
+    filter: drop-shadow(0 0 22px rgba(234,179,8,0.35));
   }
   .brand h1 {
     font-size: 1.25rem; margin: 0 0 2px;
@@ -191,10 +192,9 @@
     border-bottom: 1px solid var(--panel-border);
   }
   .sidebar-header .orb {
-    width: 34px; height: 34px; border-radius: 10px;
-    background: var(--accent-grad);
-    display: flex; align-items: center; justify-content: center; font-size: 17px;
-    box-shadow: 0 0 20px rgba(139,92,246,0.4);
+    width: 38px; height: 38px;
+    object-fit: contain; flex-shrink: 0;
+    filter: drop-shadow(0 0 14px rgba(234,179,8,0.3));
   }
   .sidebar-header .titles h2 { margin: 0; font-size: 0.98rem; font-weight: 800; }
   .sidebar-header .titles p { margin: 0; font-size: 0.72rem; color: var(--text-dim); }
@@ -289,14 +289,15 @@
     margin: auto; text-align: center; color: var(--text-dim); max-width: 420px;
   }
   .empty-state .orb-lg {
-    width: 64px; height: 64px; border-radius: 20px; margin: 0 auto 16px;
-    background: var(--accent-grad); display: flex; align-items: center; justify-content: center;
-    font-size: 30px; box-shadow: 0 0 40px rgba(139,92,246,0.35);
+    width: 76px; height: 76px; margin: 0 auto 16px;
+    object-fit: contain;
     animation: pulseGlow 3s ease-in-out infinite;
   }
+  /* drop-shadow em vez de box-shadow: a logo é um PNG recortado, então o brilho tem que
+     seguir o desenho e não a caixa do elemento */
   @keyframes pulseGlow {
-    0%, 100% { box-shadow: 0 0 30px rgba(139,92,246,0.3); }
-    50% { box-shadow: 0 0 50px rgba(34,211,238,0.4); }
+    0%, 100% { filter: drop-shadow(0 0 14px rgba(234,179,8,0.3)); }
+    50% { filter: drop-shadow(0 0 26px rgba(234,179,8,0.5)); }
   }
   .empty-state h4 { color: var(--text); margin: 0 0 8px; font-size: 1.05rem; }
   .empty-state p { font-size: 0.85rem; line-height: 1.5; margin: 0; }
@@ -470,9 +471,9 @@
 <div id="loginScreen">
   <div class="login-card">
     <div class="brand">
-      <div class="orb">✨</div>
-      <h1>Assistente IA</h1>
-      <p>Contabilidade Cricon</p>
+      <img class="orb" src="assets/logo-simbolo-claro.png" alt="Stagiario">
+      <h1>Stagiario</h1>
+      <p>Seu estagiário digital · Contabilidade Cricon</p>
     </div>
     <form id="loginForm">
       <div>
@@ -497,9 +498,9 @@
 <div id="app">
   <aside class="sidebar">
     <div class="sidebar-header">
-      <div class="orb">✨</div>
+      <img class="orb" src="assets/logo-simbolo-claro.png" alt="Stagiario">
       <div class="titles">
-        <h2>Assistente IA</h2>
+        <h2>Stagiario</h2>
         <p>Conversões por empresa</p>
       </div>
     </div>
@@ -532,7 +533,7 @@
 
     <div class="chat-body" id="chatBody">
       <div class="empty-state" id="emptyState">
-        <div class="orb-lg">✨</div>
+        <img class="orb-lg" src="assets/logo-simbolo-claro.png" alt="Stagiario">
         <h4>Escolha ou crie uma empresa</h4>
         <p>Cada empresa tem sua própria conversa e seu próprio "aprendizado" — os padrões e observações que você ensinar ficam guardados só pra ela.</p>
       </div>
@@ -960,7 +961,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       if (snap.empty && !typingActive) {
         const es = document.createElement('div');
         es.className = 'empty-state';
-        es.innerHTML = `<div class="orb-lg">✨</div><h4>Comece a conversa</h4><p>Anexe um relatório desta empresa ou escreva o que precisa — a IA lê o arquivo de verdade e responde com base no que já sabe sobre ela.</p>`;
+        es.innerHTML = `<img class="orb-lg" src="assets/logo-simbolo-claro.png" alt="Stagiario"><h4>Comece a conversa</h4><p>Anexe um relatório desta empresa ou escreva o que precisa — a IA lê o arquivo de verdade e responde com base no que já sabe sobre ela.</p>`;
         chatBody.appendChild(es);
       } else {
         snap.forEach(d => chatBody.appendChild(renderMsg(d.data())));

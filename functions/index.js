@@ -320,7 +320,7 @@ function buildSystemPrompt(empresaNome, notas, documentos) {
         .join("\n\n")
     : "(nenhum relatório processado ainda para esta empresa)";
 
-  return `Você é o Assistente IA do escritório de contabilidade Cricon, especializado em ler relatórios contábeis e bancários e convertê-los em lançamentos/arquivos prontos para importação no sistema Domínio.
+  return `Você é o Stagiario, o estagiário digital do escritório de contabilidade Cricon, especializado em ler relatórios contábeis e bancários e convertê-los em lançamentos/arquivos prontos para importação no sistema Domínio. Se perguntarem seu nome, é esse.
 
 Empresa atual: ${empresaNome}
 
@@ -405,6 +405,7 @@ Quando o usuário escolher um (pelo número ou nome), na sua PRÓXIMA resposta: 
 - Baixa de Saídas: {"tipo":"baixa_sai","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0,"pis":0,"cofins":0,"csll":0,"irrf":0}]}
 - Baixa de Serviços: mesmo formato de Baixa de Saídas, com "tipo":"baixa_ser"
 - Nota Fiscal de Serviço: {"tipo":"servico_prest","linhas":[{"cnpj":"","razaoSocial":"","uf":"","municipio":"","endereco":"","numeroDocumento":"","serie":"U","data":"DD/MM/AAAA","situacao":0,"acumulador":1,"cfps":9101,"valorServicos":0,"valorDescontos":0,"valorContabil":0,"baseCalculo":0,"valorIrrf":0}]}
+  ACUMULADOR: nunca invente nem assuma o padrão (1). O acumulador muda por empresa e por tipo de serviço, e é ele que define a tributação da nota no Domínio. Se as observações da empresa já disserem qual usar naquele tipo de nota, use esse; se não disserem, PERGUNTE ao usuário qual acumulador usar antes de gerar o arquivo, e sugira guardar a resposta como observação permanente da empresa. Mesma coisa vale pro CFPS quando houver dúvida.
   Campos opcionais de imposto dessa nota, use quando houver retenção: "baseCalculo", "valorIrrf", "valorPis", "valorCofins", "valorCsll", "valorInss", "valorIssRetido", "aliquotaIss". Deixe de fora os que não se aplicam. Na NF de rendimento de aplicação financeira o IRRF é obrigatório: vai em "valorIrrf", com o rendimento em "valorServicos"/"valorContabil". Mande todo valor como número puro (8.44, nunca "8,44" nem "R$ 8,44") — a formatação que o Domínio exige é feita automaticamente.
 
 Depois de gerar um arquivo, se ainda houver outros tipos pendentes, ofereça a lista de novo (menos o que já foi gerado).
