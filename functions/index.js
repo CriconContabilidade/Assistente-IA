@@ -407,7 +407,14 @@ function findJsonObjectEnd(text, start) {
   return -1;
 }
 
-function buildSystemPrompt(empresaNome, notas, documentos) {
+function buildSystemPrompt(empresaNome, notas, documentos, cadastro) {
+  // Código e CNPJ vêm do cadastro da empresa, preenchido na criação. Quando estão aqui a IA
+  // não precisa perguntar nem procurar no banco compartilhado.
+  const codigo = cadastro && cadastro.codigo;
+  const cnpj = cadastro && cadastro.cnpj;
+  const cadastroTexto = (codigo || cnpj)
+    ? `\nCódigo no Domínio: ${codigo || "(não informado)"} | CNPJ: ${cnpj || "(não informado)"} — use esses dados nos arquivos (campo "codigoEmp" dos Lançamentos, por exemplo) sem perguntar de novo.`
+    : "";
   const notasSeguras = Array.isArray(notas) ? notas : [];
   const documentosSeguros = Array.isArray(documentos) ? documentos : [];
   const notasTexto = notasSeguras.length
@@ -422,7 +429,7 @@ function buildSystemPrompt(empresaNome, notas, documentos) {
 
   return `Você é o Stagiario, o estagiário digital do escritório de contabilidade Cricon, especializado em ler relatórios contábeis e bancários e convertê-los em lançamentos/arquivos prontos para importação no sistema Domínio. Se perguntarem seu nome, é esse.
 
-Empresa atual: ${empresaNome}
+Empresa atual: ${empresaNome}${cadastroTexto}
 
 Observações e padrões já ensinados especificamente para esta empresa:
 ${notasTexto}
@@ -639,7 +646,7 @@ exports.assistenteChat = onCall(
     // fica de fora do cache de propósito — ela muda toda vez.
     const systemPrompt = [{
       type: "text",
-      text: buildSystemPrompt(empresa.nome, empresa.notas, documentos),
+      text: buildSystemPrompt(empresa.nome, empresa.notas, documentos, { codigo: empresa.codigoDominio, cnpj: empresa.cnpj }),
       cache_control: { type: "ephemeral" },
     }];
     const fimDoHistorico = messages[messages.length - 2];
@@ -758,11 +765,18 @@ exports.assistenteChat = onCall(
           if (!encontrado) faltando.push(e.nome);
         }
 
-        let empresaEncontrada = null;
-        try {
-          empresaEncontrada = await lookupEmpresa(empresa.nome);
-        } catch (err) {
-          console.error("Erro consultando empresa no cadastro compartilhado:", err);
+        // O cadastro da própria empresa no app vem primeiro: é preenchido na criação e não
+        // depende do nome bater exatamente com o do banco compartilhado ("MV" x "M.V. A BENS
+        // LTDA - EPP"). Só cai na busca por nome se faltar algum dos dois dados aqui.
+        let empresaEncontrada = (empresa.codigoDominio && empresa.cnpj)
+          ? { codigo: empresa.codigoDominio, cnpj: empresa.cnpj }
+          : null;
+        if (!empresaEncontrada) {
+          try {
+            empresaEncontrada = await lookupEmpresa(empresa.nome);
+          } catch (err) {
+            console.error("Erro consultando empresa no cadastro compartilhado:", err);
+          }
         }
 
         const avisos = [];

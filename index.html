@@ -481,6 +481,8 @@
     color: var(--text); font-size: 0.9rem;
   }
   .modal-card input:focus { outline: none; border-color: var(--accent2); }
+  .modal-label { display: block; font-size: 0.74rem; color: var(--text-dim); margin-bottom: 4px; }
+  .modal-dica { font-size: 0.72rem; color: var(--text-faint); line-height: 1.45; margin-top: -4px; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
   .modal-actions button {
     padding: 9px 16px; border-radius: 9px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
@@ -635,6 +637,14 @@
   <div class="modal-card">
     <h3 id="modalTitle">Título</h3>
     <input type="text" id="modalInput">
+    <!-- campos extras do cadastro de empresa: ficam escondidos nos outros usos do modal -->
+    <div id="modalExtras" hidden>
+      <label class="modal-label" for="modalCodigo">Código no Domínio</label>
+      <input type="text" id="modalCodigo" placeholder="ex: 185" inputmode="numeric">
+      <label class="modal-label" for="modalCnpj">CNPJ</label>
+      <input type="text" id="modalCnpj" placeholder="00.000.000/0000-00" inputmode="numeric">
+      <div class="modal-dica">Dá pra deixar em branco e preencher depois — a IA usa esses dados nos arquivos de importação.</div>
+    </div>
     <div class="modal-actions">
       <button class="modal-btn-cancel" id="modalCancelBtn">Cancelar</button>
       <button class="modal-btn-confirm" id="modalConfirmBtn">Confirmar</button>
@@ -912,22 +922,38 @@
   const modalConfirmBtn = document.getElementById('modalConfirmBtn');
   const modalCancelBtn = document.getElementById('modalCancelBtn');
 
-  function showPrompt({ title, placeholder = '', defaultValue = '' }) {
+  // extras=true acrescenta código e CNPJ no mesmo modal; nesse caso a promessa devolve um
+  // objeto em vez do texto puro
+  function showPrompt({ title, placeholder = '', defaultValue = '', extras = false }) {
+    const modalExtras = document.getElementById('modalExtras');
+    const modalCodigo = document.getElementById('modalCodigo');
+    const modalCnpj = document.getElementById('modalCnpj');
     return new Promise((resolve) => {
       modalTitle.textContent = title;
       modalInput.value = defaultValue;
       modalInput.placeholder = placeholder;
+      modalExtras.hidden = !extras;
+      if (extras) { modalCodigo.value = ''; modalCnpj.value = ''; }
       modalOverlay.classList.add('show');
       setTimeout(() => modalInput.focus(), 0);
 
       function cleanup(result) {
         modalOverlay.classList.remove('show');
+        modalExtras.hidden = true;
         modalConfirmBtn.removeEventListener('click', onConfirm);
         modalCancelBtn.removeEventListener('click', onCancel);
         modalInput.removeEventListener('keydown', onKeydown);
+        modalCodigo.removeEventListener('keydown', onKeydown);
+        modalCnpj.removeEventListener('keydown', onKeydown);
         resolve(result);
       }
-      function onConfirm() { cleanup(modalInput.value); }
+      function onConfirm() {
+        if (extras) {
+          cleanup({ nome: modalInput.value, codigo: modalCodigo.value.trim(), cnpj: modalCnpj.value.trim() });
+        } else {
+          cleanup(modalInput.value);
+        }
+      }
       function onCancel() { cleanup(null); }
       function onKeydown(e) {
         if (e.key === 'Enter') onConfirm();
@@ -936,6 +962,8 @@
       modalConfirmBtn.addEventListener('click', onConfirm);
       modalCancelBtn.addEventListener('click', onCancel);
       modalInput.addEventListener('keydown', onKeydown);
+      modalCodigo.addEventListener('keydown', onKeydown);
+      modalCnpj.addEventListener('keydown', onKeydown);
     });
   }
 
@@ -1006,9 +1034,19 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   }
 
   document.getElementById('newEmpresaBtn').addEventListener('click', async () => {
-    const nome = await showPrompt({ title: "Nova empresa", placeholder: "Nome da empresa" });
-    if (!nome || !nome.trim()) return;
-    const docRef = await addDoc(empresasCol, { nome: nome.trim(), notas: [], responsavelEmail: "", criadoEm: serverTimestamp() });
+    const dados = await showPrompt({ title: "Nova empresa", placeholder: "Nome da empresa", extras: true });
+    if (!dados || !dados.nome || !dados.nome.trim()) return;
+    const nome = dados.nome;
+    const docRef = await addDoc(empresasCol, {
+      nome: nome.trim(),
+      // guardados já no cadastro: são os dados que a IA precisa pra montar os arquivos, e
+      // buscá-los pelo nome no banco compartilhado falha quando o nome não bate exatamente
+      codigoDominio: (dados.codigo || "").replace(/\D/g, ""),
+      cnpj: (dados.cnpj || "").replace(/\D/g, ""),
+      notas: [],
+      responsavelEmail: "",
+      criadoEm: serverTimestamp(),
+    });
     await addDoc(collection(db, "assistenteIA_empresas", docRef.id, "mensagens"), {
       role: 'assistant', text: welcomeMessage(nome.trim()), files: [], criadoEm: serverTimestamp()
     });
