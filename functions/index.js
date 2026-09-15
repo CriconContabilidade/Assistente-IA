@@ -60,6 +60,97 @@ const SPREADSHEET_MEDIA_TYPES = new Set([
   "application/vnd.ms-excel.sheet.macroEnabled.12",
 ]);
 
+// Converte um arquivo anexado nos blocos que a API entende. Devolve null quando o formato
+// não é suportado. Usada tanto no envio quanto quando a IA pede pra reler um arquivo antigo.
+async function blocosDoArquivo(f) {
+  const nomeMinusculo = (f.name || "").toLowerCase();
+  if (f.mediaType === "application/pdf") {
+    return [{
+      type: "document",
+      source: { type: "base64", media_type: "application/pdf", data: f.base64 },
+    }];
+  }
+  if (f.mediaType.startsWith("image/")) {
+    return [{
+      type: "image",
+      source: { type: "base64", media_type: f.mediaType, data: f.base64 },
+    }];
+  }
+  if (TEXT_MEDIA_TYPES.has(f.mediaType) || nomeMinusculo.endsWith(".txt") || nomeMinusculo.endsWith(".csv")) {
+    const texto = Buffer.from(f.base64, "base64").toString("utf-8");
+    return [{ type: "text", text: `--- Conteúdo de ${f.name} ---\n${texto}` }];
+  }
+  if (SPREADSHEET_MEDIA_TYPES.has(f.mediaType) || nomeMinusculo.endsWith(".xlsx")) {
+    try {
+      const texto = await xlsxBufferToText(Buffer.from(f.base64, "base64"));
+      return [{ type: "text", text: `--- Conteúdo de ${f.name} ---\n${texto}` }];
+    } catch (err) {
+      console.error(`Erro lendo planilha ${f.name}:`, err);
+      return null;
+    }
+  }
+  return null;
+}
+
+// Um documento do Firestore não pode passar de 1 MiB, então o base64 do arquivo é quebrado
+// em pedaços e remontado na hora de reler. Margem folgada de propósito.
+const CHUNK_CHARS = 900 * 1024;
+
+// Guarda o arquivo original junto da ficha do documento, pra IA poder reler depois sem
+// precisar que o usuário reenvie (antes só o resumo em texto sobrevivia, e todo detalhe que
+// a IA não tivesse escrito nele se perdia pra sempre).
+async function salvarConteudoArquivos(documentoRef, files) {
+  for (const f of files) {
+    const pedacos = [];
+    for (let i = 0; i < f.base64.length; i += CHUNK_CHARS) {
+      pedacos.push(f.base64.slice(i, i + CHUNK_CHARS));
+    }
+    const arquivoRef = documentoRef.collection("conteudo").doc();
+    await arquivoRef.set({
+      nome: f.name,
+      mediaType: f.mediaType,
+      totalPedacos: pedacos.length,
+      criadoEm: FieldValue.serverTimestamp(),
+    });
+    for (let i = 0; i < pedacos.length; i++) {
+      await arquivoRef.collection("pedacos").doc(String(i)).set({ base64: pedacos[i] });
+    }
+  }
+}
+
+// Procura um arquivo já guardado pelo nome (do mais recente pro mais antigo) e remonta o
+// base64 a partir dos pedaços.
+async function carregarArquivoSalvo(db, empresaId, nome) {
+  const alvo = (nome || "").trim().toLowerCase();
+  if (!alvo) return null;
+
+  const documentosSnap = await db
+    .collection("assistenteIA_empresas")
+    .doc(empresaId)
+    .collection("documentos")
+    .orderBy("criadoEm", "desc")
+    .limit(60)
+    .get();
+
+  for (const docSnap of documentosSnap.docs) {
+    const conteudoSnap = await docSnap.ref.collection("conteudo").get();
+    for (const arquivoSnap of conteudoSnap.docs) {
+      const dados = arquivoSnap.data();
+      const nomeSalvo = (dados.nome || "").trim().toLowerCase();
+      // aceita o nome exato ou uma parte dele — a IA nem sempre reproduz o nome inteiro
+      if (nomeSalvo !== alvo && !nomeSalvo.includes(alvo) && !alvo.includes(nomeSalvo)) continue;
+
+      const pedacosSnap = await arquivoSnap.ref.collection("pedacos").get();
+      const pedacos = new Array(dados.totalPedacos || pedacosSnap.size).fill("");
+      pedacosSnap.forEach((p) => { pedacos[Number(p.id)] = p.data().base64 || ""; });
+      const base64 = pedacos.join("");
+      if (!base64) continue;
+      return { name: dados.nome, mediaType: dados.mediaType, base64 };
+    }
+  }
+  return null;
+}
+
 function cellToString(v) {
   if (v === null || v === undefined) return "";
   if (v instanceof Date) return v.toISOString().slice(0, 10);
@@ -231,6 +322,8 @@ ${notasTexto}
 Histórico de relatórios já processados para esta empresa (mais antigos primeiro — use isso pra responder perguntas sobre documentos enviados antes, mesmo que o arquivo original não esteja anexado agora):
 ${documentosTexto}
 
+ARQUIVOS GUARDADOS — você NUNCA precisa pedir pro usuário reenviar um relatório que ele já mandou. Todo arquivo enviado nesta empresa fica guardado, e você pode reabrir o original quando precisar de um detalhe que não está no resumo acima (data exata de um lançamento, redação do histórico, endereço de um cliente, etc.). Pra isso escreva a tag oculta {{BUSCAR_ARQUIVO:nome do arquivo}} — use o nome como aparece na lista acima. Pode pedir mais de um na mesma resposta (uma tag para cada). O arquivo volta anexado automaticamente e aí você continua a resposta normalmente; o usuário não vê a tag nem precisa fazer nada. Quando usar a tag, escreva só ela, sem texto junto — a resposta de verdade você dá depois, já com o arquivo em mãos. É PROIBIDO dizer que não consegue acessar um arquivo já enviado ou pedir pro usuário mandar de novo: use a tag.
+
 Seja direto nas respostas — sem enrolação, sem repetir o que o usuário já disse, sem explicações desnecessárias. Vá direto ao ponto que importa pro contador.
 
 TOM: simpático e informal, como um colega de trabalho que curte o que faz — não um sistema técnico. Pode soltar uma piadinha ou comentário leve de vez em quando (sem exagerar, nem em toda mensagem, e nunca em cima de assunto sério tipo erro grave ou valor errado), mas nunca à custa de clareza — a informação certa sempre vem em primeiro lugar.
@@ -372,32 +465,16 @@ exports.assistenteChat = onCall(
 
     const contentBlocks = [];
     const arquivosNaoLidos = [];
+    const arquivosParaGuardar = [];
     for (const f of files || []) {
       if (!f.base64 || !f.mediaType || !f.name) continue;
       if (f.base64.length > MAX_FILE_BASE64_CHARS) {
         throw new HttpsError("invalid-argument", `Arquivo "${f.name}" é grande demais.`);
       }
-      if (f.mediaType === "application/pdf") {
-        contentBlocks.push({
-          type: "document",
-          source: { type: "base64", media_type: "application/pdf", data: f.base64 },
-        });
-      } else if (f.mediaType.startsWith("image/")) {
-        contentBlocks.push({
-          type: "image",
-          source: { type: "base64", media_type: f.mediaType, data: f.base64 },
-        });
-      } else if (TEXT_MEDIA_TYPES.has(f.mediaType) || f.name.toLowerCase().endsWith(".txt") || f.name.toLowerCase().endsWith(".csv")) {
-        const texto = Buffer.from(f.base64, "base64").toString("utf-8");
-        contentBlocks.push({ type: "text", text: `--- Conteúdo de ${f.name} ---\n${texto}` });
-      } else if (SPREADSHEET_MEDIA_TYPES.has(f.mediaType) || f.name.toLowerCase().endsWith(".xlsx")) {
-        try {
-          const texto = await xlsxBufferToText(Buffer.from(f.base64, "base64"));
-          contentBlocks.push({ type: "text", text: `--- Conteúdo de ${f.name} ---\n${texto}` });
-        } catch (err) {
-          console.error(`Erro lendo planilha ${f.name}:`, err);
-          arquivosNaoLidos.push(f.name);
-        }
+      const blocos = await blocosDoArquivo(f);
+      if (blocos) {
+        contentBlocks.push(...blocos);
+        arquivosParaGuardar.push(f);
       } else {
         arquivosNaoLidos.push(f.name);
       }
@@ -423,25 +500,60 @@ exports.assistenteChat = onCall(
       { role: "user", content: contentBlocks },
     ];
 
-    log("chamando a Anthropic API");
-    let response;
-    try {
-      response = await anthropic.messages.create({
-        model: MODEL,
-        max_tokens: 16000,
-        system: buildSystemPrompt(empresa.nome, empresa.notas, documentos),
-        messages,
-      });
-    } catch (err) {
-      console.error("Erro chamando a Anthropic API:", err);
-      throw new HttpsError("internal", "Erro ao falar com a IA. Tente novamente em instantes.");
+    const systemPrompt = buildSystemPrompt(empresa.nome, empresa.notas, documentos);
+    async function chamarIA() {
+      try {
+        return await anthropic.messages.create({
+          model: MODEL,
+          max_tokens: 16000,
+          system: systemPrompt,
+          messages,
+        });
+      } catch (err) {
+        console.error("Erro chamando a Anthropic API:", err);
+        throw new HttpsError("internal", "Erro ao falar com a IA. Tente novamente em instantes.");
+      }
     }
-    log("resposta da Anthropic recebida");
-
-    let text = response.content
+    const textoDaResposta = (r) => r.content
       .filter((b) => b.type === "text")
       .map((b) => b.text)
       .join("\n\n");
+
+    log("chamando a Anthropic API");
+    let response = await chamarIA();
+    log("resposta da Anthropic recebida");
+    let text = textoDaResposta(response);
+
+    // Quando a IA pede um arquivo já enviado antes ({{BUSCAR_ARQUIVO:nome}}), busca o
+    // original guardado, anexa e deixa ela responder de novo — assim ela nunca precisa pedir
+    // pro usuário reenviar nada. Limite de rodadas pra não virar laço infinito.
+    for (let rodada = 0; rodada < 3; rodada++) {
+      const pedidos = [...text.matchAll(/\{\{BUSCAR_ARQUIVO:([^}]+)\}\}/g)].map((m) => m[1].trim());
+      if (pedidos.length === 0) break;
+      log(`IA pediu ${pedidos.length} arquivo(s) guardado(s): ${pedidos.join(", ")}`);
+
+      const blocosReleitura = [];
+      for (const nome of pedidos) {
+        const salvo = await carregarArquivoSalvo(db, empresaId, nome);
+        const blocos = salvo ? await blocosDoArquivo(salvo) : null;
+        if (blocos) {
+          blocosReleitura.push({ type: "text", text: `(Arquivo "${salvo.name}" recuperado do acervo desta empresa:)` });
+          blocosReleitura.push(...blocos);
+        } else {
+          blocosReleitura.push({
+            type: "text",
+            text: `(Aviso do sistema: não encontrei "${nome}" no acervo desta empresa. Não insista na tag para esse arquivo — responda com o que já tem, ou peça ao usuário só se for realmente indispensável.)`,
+          });
+        }
+      }
+
+      messages.push({ role: "assistant", content: text });
+      messages.push({ role: "user", content: blocosReleitura });
+      response = await chamarIA();
+      text = textoDaResposta(response);
+    }
+    // se sobrou alguma tag (ex. estourou o limite de rodadas), tira pra não vazar na tela
+    text = text.replace(/\{\{BUSCAR_ARQUIVO:[^}]+\}\}/g, "").trim();
 
     if (!text.trim()) {
       console.error("Resposta da IA veio sem texto. stop_reason:", response.stop_reason, "usage:", JSON.stringify(response.usage));
@@ -567,11 +679,11 @@ exports.assistenteChat = onCall(
         criadoEm: FieldValue.serverTimestamp(),
       });
 
-    // Todo relatório enviado vira uma ficha permanente — é isso que a IA consulta depois,
-    // mesmo que o arquivo original não seja reenviado numa pergunta futura.
+    // Todo relatório enviado vira uma ficha permanente com o resumo E o arquivo original
+    // guardado junto, pra IA poder reabrir depois em vez de pedir pro usuário reenviar.
     const fileNames = (files || []).map((f) => f.name).filter(Boolean);
     if (fileNames.length > 0) {
-      await db
+      const documentoRef = await db
         .collection("assistenteIA_empresas")
         .doc(empresaId)
         .collection("documentos")
@@ -580,6 +692,13 @@ exports.assistenteChat = onCall(
           resumo: text,
           criadoEm: FieldValue.serverTimestamp(),
         });
+      try {
+        await salvarConteudoArquivos(documentoRef, arquivosParaGuardar);
+        log(`arquivos guardados (${arquivosParaGuardar.length})`);
+      } catch (err) {
+        // guardar o original é um extra: se falhar, o resumo já foi salvo e o chat segue
+        console.error("Erro guardando conteúdo dos arquivos:", err);
+      }
     }
     log("finalizado");
 
