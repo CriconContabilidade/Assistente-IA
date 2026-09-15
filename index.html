@@ -349,8 +349,9 @@
   .msg.user .msg-avatar { background: rgba(255,255,255,0.08); border: 1px solid var(--panel-border); }
   .msg-bubble {
     padding: 12px 15px; border-radius: 14px; font-size: 0.9rem; line-height: 1.55;
-    border: 1px solid var(--panel-border);
+    border: 1px solid var(--panel-border); white-space: pre-wrap;
   }
+  .msg-path-image { max-width: 100%; border-radius: 8px; margin: 6px 0; display: block; }
   .msg.assistant .msg-bubble { background: var(--panel); border-top-left-radius: 4px; }
   .msg.user .msg-bubble { background: linear-gradient(135deg, rgba(139,92,246,0.18), rgba(34,211,238,0.1)); border-top-right-radius: 4px; }
   .msg-bubble .file-chip {
@@ -372,6 +373,39 @@
     background: rgba(255,255,255,0.22); flex-shrink: 0;
   }
   .download-chip .download-chip-icon svg { width: 14px; height: 14px; }
+
+  /* ---------- grade de conferência do arquivo gerado ---------- */
+  .conferencia {
+    margin-top: 12px;
+    border: 1px solid var(--panel-border); border-radius: 12px;
+    background: rgba(255,255,255,0.02);
+    overflow: hidden;
+  }
+  .conferencia-topo {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 9px 12px; cursor: pointer;
+    background: rgba(255,255,255,0.03);
+  }
+  .conferencia-topo:hover { background: rgba(255,255,255,0.05); }
+  .conferencia-titulo { font-size: 0.8rem; font-weight: 700; color: var(--text); }
+  .conferencia-titulo span { font-weight: 400; color: var(--text-dim); }
+  .conferencia-seta { color: var(--text-dim); font-size: 0.75rem; flex-shrink: 0; }
+  /* a tabela é larga (a NF tem 28 colunas), então rola na horizontal dentro do balão em vez
+     de esticar a conversa inteira */
+  .conferencia-corpo { max-height: 320px; overflow: auto; }
+  .conferencia table { border-collapse: collapse; font-size: 0.72rem; white-space: nowrap; }
+  .conferencia th, .conferencia td {
+    padding: 5px 9px; border-bottom: 1px solid var(--panel-border);
+    text-align: left; color: var(--text);
+  }
+  .conferencia th {
+    position: sticky; top: 0; z-index: 1;
+    background: var(--panel-solid); color: var(--text-dim);
+    font-weight: 600; font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .conferencia td.vazia { color: var(--text-faint); }
+  .conferencia tr:last-child td { border-bottom: none; }
+  .conferencia-num { color: var(--text-faint); text-align: right; }
 
   .typing { display: flex; gap: 4px; padding: 4px 0; }
   .typing span {
@@ -588,11 +622,11 @@
             <path d="M18.6 18.6L21 21" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
           </svg>
         </button>
-        <input type="file" id="fileInput" multiple style="display:none">
+        <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.csv,.xlsx,.xlsm" multiple style="display:none">
         <textarea id="messageInput" rows="1" placeholder="Envie um relatório ou pergunte algo..." disabled></textarea>
         <button class="composer-btn send-btn" id="sendBtn" disabled>➤</button>
       </div>
-      <div class="composer-hint">Arquivos PDF de até 8MB. A IA usa as observações da empresa (aba "🧠 O que a IA já sabe") como contexto.</div>
+      <div class="composer-hint">PDF, imagem, TXT, CSV ou Excel de até 8MB por arquivo. A IA usa as observações da empresa como contexto.</div>
     </div>
   </div>
 </div>
@@ -681,6 +715,7 @@
 
   let currentUserEmail = null;
   let isAdmin = false;
+  let unsubEmpresas = null;
 
   onAuthStateChanged(auth, (user) => {
     if (user) {
@@ -688,9 +723,19 @@
       appEl.classList.add('show');
       currentUserEmail = user.email;
       isAdmin = isAdminEmail(user.email);
-      userEmail.innerHTML = user.email + (isAdmin ? ' <span class="admin-badge">admin</span>' : '');
+      userEmail.replaceChildren(document.createTextNode(user.email || ''));
+      if (isAdmin) {
+        const badge = document.createElement('span');
+        badge.className = 'admin-badge';
+        badge.textContent = 'admin';
+        userEmail.append(' ', badge);
+      }
       initEmpresas();
     } else {
+      if (unsubEmpresas) { unsubEmpresas(); unsubEmpresas = null; }
+      if (unsubMessages) { unsubMessages(); unsubMessages = null; }
+      if (unsubDocs) { unsubDocs(); unsubDocs = null; }
+      activeEmpresaId = null;
       loginScreen.style.display = 'flex';
       appEl.classList.remove('show');
     }
@@ -804,7 +849,8 @@
   let seeded = false;
 
   function initEmpresas() {
-    onSnapshot(query(empresasCol, orderBy("nome")), async (snap) => {
+    if (unsubEmpresas) unsubEmpresas();
+    unsubEmpresas = onSnapshot(query(empresasCol, orderBy("nome")), async (snap) => {
       empresas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       if (!seeded && empresas.length === 0) {
         seeded = true;
@@ -816,7 +862,7 @@
       renderEmpresaList(empresaSearch.value);
       if (activeEmpresaId) {
         const still = empresas.find(e => e.id === activeEmpresaId);
-        if (still) { renderNotes(still); renderMessagesForActive(); }
+        if (still) renderNotes(still);
       }
       seedNotesFromHub();
     }, err => {
@@ -828,6 +874,7 @@
   // vez (empresa sem nenhuma nota ainda) — nunca sobrescreve o que alguém já ensinou.
   const seededNotesFor = new Set();
   async function seedNotesFromHub() {
+    if (!isAdmin) return;
     for (const emp of empresas) {
       const seed = NOTES_SEED[emp.nome];
       if (!seed || seededNotesFor.has(emp.id)) continue;
@@ -842,19 +889,19 @@
   }
 
   function initials(nome) {
-    return nome.split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+    return String(nome || '').trim().split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
   }
 
   // Sem admin: só vê empresas sem responsável ainda (de todo mundo) ou atribuídas a ela mesma.
   function visibleToCurrentUser(emp) {
     if (isAdmin) return true;
     if (!emp.responsavelEmail) return true;
-    return emp.responsavelEmail.toLowerCase() === (currentUserEmail || "").toLowerCase();
+    return String(emp.responsavelEmail).toLowerCase() === (currentUserEmail || "").toLowerCase();
   }
 
   function responsavelLabel(emp) {
     if (!emp.responsavelEmail) return "Sem responsável — visível pra todos";
-    return "👤 " + emp.responsavelEmail;
+    return "👤 " + String(emp.responsavelEmail);
   }
 
   // Modal próprio no lugar de window.prompt() — o prompt() nativo não funciona dentro do
@@ -904,7 +951,7 @@
 
   function renderEmpresaList(filter = "") {
     const q = filter.trim().toLowerCase();
-    const list = empresas.filter(e => visibleToCurrentUser(e) && e.nome.toLowerCase().includes(q));
+    const list = empresas.filter(e => visibleToCurrentUser(e) && String(e.nome || '').toLowerCase().includes(q));
     empresaListEl.innerHTML = "";
     if (list.length === 0) {
       empresaListEl.innerHTML = '<div style="color:var(--text-faint); font-size:0.8rem; padding:10px;">Nenhuma empresa encontrada.</div>';
@@ -913,14 +960,27 @@
     list.forEach(emp => {
       const item = document.createElement('div');
       item.className = 'empresa-item' + (emp.id === activeEmpresaId ? ' active' : '');
-      item.innerHTML = `
-        <div class="empresa-avatar">${initials(emp.nome)}</div>
-        <div class="empresa-info">
-          <div class="empresa-name">${emp.nome}</div>
-          <div class="empresa-sub">${responsavelLabel(emp)}</div>
-        </div>
-        ${isAdmin ? `<button class="assign-btn" title="Atribuir responsável">👤</button>` : ``}
-      `;
+      const avatar = document.createElement('div');
+      avatar.className = 'empresa-avatar';
+      avatar.textContent = initials(emp.nome);
+      const info = document.createElement('div');
+      info.className = 'empresa-info';
+      const name = document.createElement('div');
+      name.className = 'empresa-name';
+      name.textContent = String(emp.nome || 'Empresa sem nome');
+      const sub = document.createElement('div');
+      sub.className = 'empresa-sub';
+      sub.textContent = responsavelLabel(emp);
+      info.append(name, sub);
+      item.append(avatar, info);
+      if (isAdmin) {
+        const assign = document.createElement('button');
+        assign.className = 'assign-btn';
+        assign.type = 'button';
+        assign.title = 'Atribuir responsável';
+        assign.textContent = '👤';
+        item.appendChild(assign);
+      }
       item.querySelector('.assign-btn')?.addEventListener('click', (e) => {
         e.stopPropagation();
         promptAssign(emp);
@@ -1010,26 +1070,151 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     });
   }
 
+  // Mostra, linha a linha, o que foi realmente gravado no arquivo — a ideia é conferir aqui
+  // e não descobrir o erro só quando o Domínio recusar a importação. Vem fechada pra não
+  // tomar a conversa inteira; um clique abre.
+  function renderConferencia(arquivo) {
+    const colunas = Array.isArray(arquivo.colunas) ? arquivo.colunas : [];
+    const celulas = Array.isArray(arquivo.celulas) ? arquivo.celulas : [];
+    if (!colunas.length || !celulas.length) return null;
+
+    const caixa = document.createElement('div');
+    caixa.className = 'conferencia';
+
+    const topo = document.createElement('div');
+    topo.className = 'conferencia-topo';
+    const titulo = document.createElement('div');
+    titulo.className = 'conferencia-titulo';
+    const qtd = celulas.length;
+    titulo.append(document.createTextNode(`Conferir ${String(arquivo.titulo || arquivo.nome)} `));
+    const detalhe = document.createElement('span');
+    detalhe.textContent = `(${qtd} ${qtd === 1 ? 'linha' : 'linhas'})`;
+    titulo.appendChild(detalhe);
+    const seta = document.createElement('div');
+    seta.className = 'conferencia-seta';
+    seta.textContent = '▼ ver';
+    topo.append(titulo, seta);
+
+    const corpo = document.createElement('div');
+    corpo.className = 'conferencia-corpo';
+    corpo.hidden = true;
+
+    const tabela = document.createElement('table');
+    const thead = document.createElement('thead');
+    const trCab = document.createElement('tr');
+    const thNum = document.createElement('th');
+    thNum.textContent = '#';
+    trCab.appendChild(thNum);
+    colunas.forEach((c) => {
+      const th = document.createElement('th');
+      th.textContent = String(c);
+      trCab.appendChild(th);
+    });
+    thead.appendChild(trCab);
+    tabela.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    celulas.forEach((linha, i) => {
+      const tr = document.createElement('tr');
+      const tdNum = document.createElement('td');
+      tdNum.className = 'conferencia-num';
+      tdNum.textContent = String(i + 1);
+      tr.appendChild(tdNum);
+      colunas.forEach((_, col) => {
+        const td = document.createElement('td');
+        const valor = linha[col] === undefined ? '' : String(linha[col]);
+        if (valor === '') {
+          td.className = 'vazia';
+          td.textContent = '—';
+        } else {
+          td.textContent = valor;
+        }
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    tabela.appendChild(tbody);
+    corpo.appendChild(tabela);
+
+    topo.addEventListener('click', () => {
+      corpo.hidden = !corpo.hidden;
+      seta.textContent = corpo.hidden ? '▼ ver' : '▲ fechar';
+    });
+
+    caixa.append(topo, corpo);
+    return caixa;
+  }
+
   function renderMsg(m) {
     const wrap = document.createElement('div');
     wrap.className = 'msg ' + (m.role === 'user' ? 'user' : 'assistant');
-    const filesHtml = (m.files || []).map(f => `<div class="file-chip">📄 ${f}</div>`).join('');
-    // arquivosGerados é uma lista porque uma mesma resposta pode gerar mais de um arquivo
-    // de importação (ex.: baixa de saídas + baixa de entradas + lançamentos de uma vez).
-    const arquivosGerados = (m.arquivosGerados || []).filter(a => a && a.nome && a.base64);
-    const downloadIconSvg = `<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3v12m0 0l-4-4m4 4l4-4M5 21h14" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-    const arquivosHtml = arquivosGerados
-      .map((a, i) => `<button class="download-chip" type="button" data-idx="${i}">Baixar ${a.nome}<span class="download-chip-icon">${downloadIconSvg}</span></button>`)
-      .join('');
-    wrap.innerHTML = `
-      <div class="msg-avatar">${m.role === 'user' ? '🧑‍💼' : '✨'}</div>
-      <div class="msg-bubble">${m.text ? m.text.replace(/\n/g, '<br>') : ''}${filesHtml}${arquivosHtml}</div>
-    `;
-    wrap.querySelectorAll('.download-chip').forEach(btn => {
-      const arquivo = arquivosGerados[Number(btn.dataset.idx)];
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-avatar';
+    avatar.textContent = m.role === 'user' ? '🧑‍💼' : '✨';
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    appendSafeMessageText(bubble, m.text || '');
+
+    const arquivosGerados = (Array.isArray(m.arquivosGerados) ? m.arquivosGerados : []).filter(a => a && a.nome && a.base64);
+    for (const fileName of Array.isArray(m.files) ? m.files : []) {
+      const chip = document.createElement('div');
+      chip.className = 'file-chip';
+      chip.textContent = `📄 ${String(fileName)}`;
+      bubble.appendChild(chip);
+    }
+    arquivosGerados.forEach((arquivo) => {
+      const grade = renderConferencia(arquivo);
+      if (grade) bubble.appendChild(grade);
+      const btn = document.createElement('button');
+      btn.className = 'download-chip';
+      btn.type = 'button';
+      btn.append(document.createTextNode(`Baixar ${String(arquivo.nome)}`));
+      const icon = document.createElement('span');
+      icon.className = 'download-chip-icon';
+      icon.textContent = '↓';
+      btn.appendChild(icon);
       btn.addEventListener('click', () => downloadArquivoGerado(arquivo.nome, arquivo.base64));
+      bubble.appendChild(btn);
     });
+    wrap.append(avatar, bubble);
     return wrap;
+  }
+
+  const PATH_IMAGE_ALTS = {
+    'diario.png': 'Caminho do relatório Diário no Domínio',
+    'plano-de-contas.png': 'Caminho do Plano de Contas no Domínio',
+    'contas-a-receber.png': 'Caminho de Contas a Receber no Domínio',
+    'contas-a-pagar.png': 'Caminho de Contas a Pagar no Domínio',
+    'cadastro-de-fornecedores.png': 'Caminho do Cadastro de Fornecedores no Domínio',
+    'cadastro-de-clientes.png': 'Caminho do Cadastro de Clientes no Domínio',
+    'cnpj-e-codigo.png': 'Caminho do Código e CNPJ da empresa no Domínio',
+    'diario-emissao.png': 'Configurações de emissão do Diário',
+    'plano-de-contas-emissao.png': 'Configurações de emissão do Plano de Contas',
+    'contas-a-receber-emissao.png': 'Configurações de emissão de Contas a Receber',
+    'contas-a-pagar-emissao.png': 'Configurações de emissão de Contas a Pagar',
+    'fornecedores-emissao.png': 'Configurações de emissão do Cadastro de Fornecedores',
+    'clientes-emissao.png': 'Configurações de emissão do Cadastro de Clientes',
+  };
+
+  function appendSafeMessageText(container, value) {
+    const text = String(value || '');
+    const imagePattern = /<img src="assets\/caminhos\/([a-z-]+\.png)"[^>]*>/g;
+    let cursor = 0;
+    for (const match of text.matchAll(imagePattern)) {
+      container.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+      const file = match[1];
+      if (PATH_IMAGE_ALTS[file]) {
+        const img = document.createElement('img');
+        img.className = 'msg-path-image';
+        img.src = `assets/caminhos/${file}`;
+        img.alt = PATH_IMAGE_ALTS[file];
+        container.appendChild(img);
+      } else {
+        container.appendChild(document.createTextNode(match[0]));
+      }
+      cursor = match.index + match[0].length;
+    }
+    container.appendChild(document.createTextNode(text.slice(cursor)));
   }
 
   function downloadArquivoGerado(nome, base64) {
@@ -1071,11 +1256,16 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     pendingFiles.forEach((f, i) => {
       const chip = document.createElement('div');
       chip.className = 'attach-chip';
-      chip.innerHTML = `📄 ${f.name} <button data-i="${i}">✕</button>`;
-      chip.querySelector('button').addEventListener('click', () => {
+      chip.append(document.createTextNode(`📄 ${f.name} `));
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.dataset.i = String(i);
+      remove.textContent = '✕';
+      remove.addEventListener('click', () => {
         pendingFiles.splice(i, 1);
         renderAttachPreview();
       });
+      chip.appendChild(remove);
       attachPreview.appendChild(chip);
     });
   }
@@ -1105,9 +1295,9 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
 
   async function sendMessage() {
     if (!activeEmpresaId || isSending) return;
+    const empresaIdEnvio = activeEmpresaId;
     const text = messageInput.value.trim();
     if (!text && pendingFiles.length === 0) return;
-    isSending = true;
 
     let totalBytes = 0;
     for (const f of pendingFiles) {
@@ -1124,14 +1314,12 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
 
     const filesToSend = pendingFiles.slice();
     const fileNames = filesToSend.map(f => f.name);
-    const msgsCol = collection(db, "assistenteIA_empresas", activeEmpresaId, "mensagens");
-    await addDoc(msgsCol, { role: 'user', text, files: fileNames, criadoEm: serverTimestamp() });
-
-    messageInput.value = "";
-    messageInput.style.height = 'auto';
-    pendingFiles = [];
-    renderAttachPreview();
-
+    const history = currentMessages
+      .filter(m => m && typeof m.text === 'string' && m.text.trim())
+      .slice(-80)
+      .map(m => ({ role: m.role, text: m.text }));
+    const msgsCol = collection(db, "assistenteIA_empresas", empresaIdEnvio, "mensagens");
+    isSending = true;
     setComposerBusy(true);
     showTyping(filesToSend.length > 0);
     try {
@@ -1141,12 +1329,14 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         base64: await fileToBase64(f)
       })));
 
-      const history = currentMessages
-        .filter(m => m.text && m.text.trim())
-        .map(m => ({ role: m.role, text: m.text }));
+      await addDoc(msgsCol, { role: 'user', text, files: fileNames, criadoEm: serverTimestamp() });
+      messageInput.value = "";
+      messageInput.style.height = 'auto';
+      pendingFiles = [];
+      renderAttachPreview();
 
       const result = await assistenteChat({
-        empresaId: activeEmpresaId,
+        empresaId: empresaIdEnvio,
         message: text,
         history,
         files: filesBase64
@@ -1275,13 +1465,18 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         const data = doc.criadoEm && doc.criadoEm.toDate ? doc.criadoEm.toDate().toLocaleString('pt-BR') : '';
         const item = document.createElement('div');
         item.className = 'doc-item';
-        item.innerHTML = `
-          <div class="doc-header">
-            <span class="doc-files">📄 ${(doc.arquivos || []).join(', ')}</span>
-            <span>${data}</span>
-          </div>
-          <div class="doc-resumo">${(doc.resumo || '').replace(/</g, '&lt;')}</div>
-        `;
+        const header = document.createElement('div');
+        header.className = 'doc-header';
+        const files = document.createElement('span');
+        files.className = 'doc-files';
+        files.textContent = `📄 ${(Array.isArray(doc.arquivos) ? doc.arquivos : []).map(String).join(', ')}`;
+        const date = document.createElement('span');
+        date.textContent = data;
+        header.append(files, date);
+        const resumo = document.createElement('div');
+        resumo.className = 'doc-resumo';
+        resumo.textContent = String(doc.resumo || '');
+        item.append(header, resumo);
         docsList.appendChild(item);
       });
     });
@@ -1290,14 +1485,21 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   function renderNotes(emp) {
     notesTitle.textContent = `Aprendizado — ${emp.nome}`;
     notesList.innerHTML = "";
-    (emp.notas || []).forEach((nota, i) => {
+    const notas = Array.isArray(emp.notas) ? emp.notas : [];
+    notas.forEach((nota, i) => {
       const item = document.createElement('div');
       item.className = 'note-item';
-      item.innerHTML = `<span>${nota}</span><button data-i="${i}">✕</button>`;
-      item.querySelector('button').addEventListener('click', () => removeNote(emp.id, i));
+      const text = document.createElement('span');
+      text.textContent = String(nota);
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.dataset.i = String(i);
+      remove.textContent = '✕';
+      remove.addEventListener('click', () => removeNote(emp.id, i));
+      item.append(text, remove);
       notesList.appendChild(item);
     });
-    if ((emp.notas || []).length === 0) {
+    if (notas.length === 0) {
       notesList.innerHTML = '<div style="color:var(--text-faint); font-size:0.82rem;">Nenhuma observação ainda.</div>';
     }
   }
@@ -1316,7 +1518,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   async function removeNote(empId, index) {
     const emp = empresas.find(e => e.id === empId);
     if (!emp) return;
-    const notas = (emp.notas || []).filter((_, i) => i !== index);
+    const notas = (Array.isArray(emp.notas) ? emp.notas : []).filter((_, i) => i !== index);
     await updateDoc(doc(db, "assistenteIA_empresas", empId), { notas });
   }
 </script>

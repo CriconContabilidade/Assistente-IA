@@ -341,6 +341,24 @@ function buildServicoPrestLines(linhas) {
 
 // Monta o arquivo de verdade a partir da tag {{GERAR_ARQUIVO:{...}}} que a IA inclui na
 // resposta. Retorna null se a tag não existir ou o tipo não for reconhecido.
+// Cabeçalhos da grade de conferência — na mesma ordem das colunas que vão pro arquivo, pra
+// pessoa conferir cada linha ANTES de importar em vez de descobrir erro no Domínio.
+const COLUNAS_ARQUIVO = {
+  lanctos: ["Data", "Débito", "Crédito", "Valor", "Cód. Hist.", "Histórico", "Inicia lote", "Empresa", "C. Custo Déb.", "C. Custo Cred."],
+  baixa_ent: ["Título", "CNPJ/CPF", "Vencimento", "Data da baixa", "Valor", "Juros", "Multa", "Desconto"],
+  baixa_sai: ["Título", "CNPJ/CPF", "Vencimento", "Data da baixa", "Valor", "Juros", "Multa", "Desconto", "PIS", "COFINS", "CSLL", "IRRF"],
+  baixa_ser: ["Título", "CNPJ/CPF", "Vencimento", "Data da baixa", "Valor", "Juros", "Multa", "Desconto", "PIS", "COFINS", "CSLL", "IRRF"],
+  servico_prest: ["CNPJ/CPF", "Razão Social", "UF", "Município", "Endereço", "Nº Documento", "Série", "Data", "Situação", "Acumulador", "CFPS", "Vlr. Serviços", "Descontos", "Dedução", "Vlr. Contábil", "Base Cálculo", "Alíq. ISS", "ISS Normal", "ISS Retido", "IRRF", "PIS", "COFINS", "CSLL", "CRF", "INSS", "Cód. Item", "Qtd.", "Vlr. Unitário"],
+};
+
+const TITULOS_ARQUIVO = {
+  lanctos: "Lançamentos",
+  baixa_ent: "Baixa de Entradas",
+  baixa_sai: "Baixa de Saídas",
+  baixa_ser: "Baixa de Serviços",
+  servico_prest: "Nota Fiscal de Serviço",
+};
+
 function buildArquivoGerado(spec) {
   const nomeArquivo = FILE_NAMES[spec && spec.tipo];
   if (!nomeArquivo || !Array.isArray(spec.linhas) || spec.linhas.length === 0) return null;
@@ -353,7 +371,17 @@ function buildArquivoGerado(spec) {
   else return null;
 
   const content = lines.join("\r\n") + "\r\n";
-  return { nome: nomeArquivo, base64: toLatin1Base64(content), linhas: spec.linhas.length };
+  return {
+    nome: nomeArquivo,
+    base64: toLatin1Base64(content),
+    linhas: spec.linhas.length,
+    tipo: spec.tipo,
+    titulo: TITULOS_ARQUIVO[spec.tipo] || spec.tipo,
+    // A grade mostra exatamente o que foi gravado no arquivo, já formatado — não os dados
+    // "de antes", senão ela conferiria uma coisa e o Domínio receberia outra.
+    colunas: COLUNAS_ARQUIVO[spec.tipo] || [],
+    celulas: lines.map((l) => l.split(";")),
+  };
 }
 
 function findJsonObjectEnd(text, start) {
