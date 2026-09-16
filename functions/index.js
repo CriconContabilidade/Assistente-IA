@@ -58,12 +58,23 @@ const MAX_TOTAL_BASE64_CHARS = 28 * 1024 * 1024;
 const MAX_MESSAGE_CHARS = 20 * 1024;
 const MAX_HISTORY_ITEMS = 80;
 
-const TEXT_MEDIA_TYPES = new Set(["text/plain", "text/csv", "application/csv"]);
+const TEXT_MEDIA_TYPES = new Set(["text/plain", "text/csv", "application/csv", "application/x-ofx", "text/ofx"]);
 const SPREADSHEET_MEDIA_TYPES = new Set([
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   "application/vnd.ms-excel.sheet.macroEnabled.12",
 ]);
 const IMAGE_MEDIA_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+
+// OFX de banco e TXT/CSV exportados pelo Domínio costumam vir em ANSI (Windows-1252), não
+// UTF-8. Tenta UTF-8 estrito primeiro; se o arquivo não for UTF-8 válido, lê como 1252 —
+// senão "TRANSFERÊNCIA" chegaria pra IA como "TRANSFER�NCIA".
+function decodificarTexto(buffer) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    return new TextDecoder("windows-1252").decode(buffer);
+  }
+}
 
 // Converte um arquivo anexado nos blocos que a API entende. Devolve null quando o formato
 // não é suportado. Usada tanto no envio quanto quando a IA pede pra reler um arquivo antigo.
@@ -81,8 +92,8 @@ async function blocosDoArquivo(f) {
       source: { type: "base64", media_type: f.mediaType, data: f.base64 },
     }];
   }
-  if (TEXT_MEDIA_TYPES.has(f.mediaType) || nomeMinusculo.endsWith(".txt") || nomeMinusculo.endsWith(".csv")) {
-    const texto = Buffer.from(f.base64, "base64").toString("utf-8");
+  if (TEXT_MEDIA_TYPES.has(f.mediaType) || nomeMinusculo.endsWith(".txt") || nomeMinusculo.endsWith(".csv") || nomeMinusculo.endsWith(".ofx")) {
+    const texto = decodificarTexto(Buffer.from(f.base64, "base64"));
     return [{ type: "text", text: `--- Conteúdo de ${f.name} ---\n${texto}` }];
   }
   if (SPREADSHEET_MEDIA_TYPES.has(f.mediaType) || nomeMinusculo.endsWith(".xlsx")) {
@@ -206,17 +217,23 @@ function fmtValorOpcionalTxt(n) {
 }
 
 function campoTxt(valor, nome, obrigatorio = false) {
-  const texto = String(valor ?? "").trim();
+  let texto = String(valor ?? "").trim().replace(/[\r\n]+/g, " ");
+  if (texto.includes(";")) {
+    texto = texto.replace(/\s*;\s*/g, " - ");
+  }
   if (obrigatorio && !texto) throw new Error(`Campo obrigatório ausente: ${nome}`);
-  if (/[;\r\n]/.test(texto)) throw new Error(`Campo "${nome}" contém ponto e vírgula ou quebra de linha`);
   return texto;
 }
 
 // obrigatorio=false permite data em branco (ex.: vencimento de baixa, que nem sempre existe);
 // o que não se aceita é data preenchida em formato errado ou inexistente no calendário.
 function dataTxt(valor, nome, obrigatorio = true) {
-  const texto = campoTxt(valor, nome, obrigatorio);
+  let texto = campoTxt(valor, nome, obrigatorio);
   if (!texto) return "";
+  const matchIso = texto.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (matchIso) {
+    texto = `${matchIso[3]}/${matchIso[2]}/${matchIso[1]}`;
+  }
   if (!/^\d{2}\/\d{2}\/\d{4}$/.test(texto)) throw new Error(`Data inválida em "${nome}": ${texto}`);
   const [dia, mes, ano] = texto.split("/").map(Number);
   const data = new Date(Date.UTC(ano, mes - 1, dia));
@@ -226,9 +243,40 @@ function dataTxt(valor, nome, obrigatorio = true) {
   return texto;
 }
 
+function validarCnpjCpfDv(digits) {
+  if (digits.length === 11) {
+    if (/^(\d)\1{10}$/.test(digits)) return false;
+    let soma = 0;
+    for (let i = 0; i < 9; i++) soma += Number(digits[i]) * (10 - i);
+    let resto = (soma * 10) % 11;
+    if (resto === 10 || resto === 11) resto = 0;
+    if (resto !== Number(digits[9])) return false;
+    soma = 0;
+    for (let i = 0; i < 10; i++) soma += Number(digits[i]) * (11 - i);
+    resto = (soma * 10) % 11;
+    if (resto === 10 || resto === 11) resto = 0;
+    return resto === Number(digits[10]);
+  } else if (digits.length === 14) {
+    if (/^(\d)\1{13}$/.test(digits)) return false;
+    const pesos1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+    let soma = 0;
+    for (let i = 0; i < 12; i++) soma += Number(digits[i]) * pesos1[i];
+    let resto = soma % 11;
+    const dv1 = resto < 2 ? 0 : 11 - resto;
+    if (dv1 !== Number(digits[12])) return false;
+    const pesos2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
+    soma = 0;
+    for (let i = 0; i < 13; i++) soma += Number(digits[i]) * pesos2[i];
+    resto = soma % 11;
+    const dv2 = resto < 2 ? 0 : 11 - resto;
+    return dv2 === Number(digits[13]);
+  }
+  return false;
+}
+
 // Em branco é válido quando o campo não é obrigatório: nas baixas o título já é identificado
 // pelo número, e é comum o CNPJ vir vazio. Se vier preenchido, aí sim tem que estar certo.
-function documentoTxt(valor, nome = "CNPJ/CPF", obrigatorio = false) {
+function documentoTxt(valor, nome = "CNPJ/CPF", obrigatorio = false, avisos = null) {
   const digits = String(valor ?? "").replace(/\D/g, "");
   if (!digits) {
     if (obrigatorio) throw new Error(`Campo obrigatório ausente: ${nome}`);
@@ -237,11 +285,22 @@ function documentoTxt(valor, nome = "CNPJ/CPF", obrigatorio = false) {
   if (digits.length !== 11 && digits.length !== 14) {
     throw new Error(`${nome} deve ter 11 ou 14 dígitos`);
   }
+  if (!validarCnpjCpfDv(digits)) {
+    // não bloqueia: pode ser erro de leitura do relatório, mas pode ser o CNPJ certo com
+    // cadastro torto no Domínio — o usuário decide, então vira aviso na conversa
+    if (avisos) avisos.push(`${nome} (${digits}) tem dígito verificador inválido — confira se o número está certo`);
+  }
   return digits;
 }
 
 function stripAccentsJs(s) {
-  return String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "");
+  return String(s ?? "")
+    .replace(/[–—]/g, "-")
+    .replace(/[“”]/g, '"')
+    .replace(/[’‘`]/g, "'")
+    .replace(/[•·]/g, "*")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
 }
 
 // O Domínio importa em ANSI/Latin-1 — cada caractere fora do intervalo vira "?", igual ao
@@ -263,26 +322,67 @@ const FILE_NAMES = {
   servico_prest: "ServicoPrest.txt",
 };
 
-function buildLanctosLines(linhas) {
-  return linhas.map((l, index) => [
-    dataTxt(l.data, `data da linha ${index + 1}`),
-    campoTxt(l.debito, `débito da linha ${index + 1}`, true),
-    campoTxt(l.credito, `crédito da linha ${index + 1}`, true),
-    fmtValorTxt(l.valor),
-    campoTxt(l.codHist, `código do histórico da linha ${index + 1}`),
-    campoTxt(stripAccentsJs(l.complemento || ""), `complemento da linha ${index + 1}`),
-    campoTxt(l.iniciaLote, `início de lote da linha ${index + 1}`),
-    campoTxt(l.codigoEmp, `código da empresa da linha ${index + 1}`),
-    campoTxt(l.centroCustoDebito, `centro de custo débito da linha ${index + 1}`),
-    campoTxt(l.centroCustoCredito, `centro de custo crédito da linha ${index + 1}`),
-  ].join(";"));
+// Partidas múltiplas: o Domínio abre um lote na linha com "inicia lote" = 1, e as linhas
+// seguintes (até o próximo "1") pertencem a ele — é só dentro de um lote que uma linha pode
+// ter apenas débito ou apenas crédito, e o lote tem que fechar (débitos = créditos). Fora de
+// lote, linha de um lado só geraria lançamento torto no Domínio. Mesmo padrão da Mantovani.
+function validarLotesLanctos(linhas) {
+  let lote = null;
+  const fecharLote = () => {
+    if (lote && lote.debito !== lote.credito) {
+      const fmt = (c) => (c / 100).toFixed(2).replace(".", ",");
+      throw new Error(`o lote que começa na linha ${lote.inicio} não fecha: débitos ${fmt(lote.debito)} x créditos ${fmt(lote.credito)}`);
+    }
+  };
+  linhas.forEach((l, i) => {
+    const temDebito = String(l.debito ?? "").trim() !== "";
+    const temCredito = String(l.credito ?? "").trim() !== "";
+    if (String(l.iniciaLote ?? "").trim() === "1") {
+      fecharLote();
+      lote = { inicio: i + 1, debito: 0, credito: 0 };
+    }
+    if (!lote) {
+      if (temDebito !== temCredito) {
+        throw new Error(`a linha ${i + 1} de Lançamentos tem só ${temDebito ? "débito" : "crédito"} e não está dentro de um lote (marque "iniciaLote": "1" na primeira linha do lote)`);
+      }
+      return;
+    }
+    // em centavos, pra soma não errar por arredondamento de ponto flutuante
+    const centavos = Math.round(Number(l.valor || 0) * 100);
+    if (temDebito) lote.debito += centavos;
+    if (temCredito) lote.credito += centavos;
+  });
+  fecharLote();
 }
 
-function buildBaixaLines(linhas, tipo) {
+function buildLanctosLines(linhas) {
+  validarLotesLanctos(linhas);
+  return linhas.map((l, index) => {
+    const debito = campoTxt(l.debito, `débito da linha ${index + 1}`, false);
+    const credito = campoTxt(l.credito, `crédito da linha ${index + 1}`, false);
+    if (!debito && !credito) {
+      throw new Error(`Linha ${index + 1} de Lançamentos: informe ao menos a conta a débito ou a crédito.`);
+    }
+    return [
+      dataTxt(l.data, `data da linha ${index + 1}`),
+      debito,
+      credito,
+      fmtValorTxt(l.valor),
+      campoTxt(l.codHist, `código do histórico da linha ${index + 1}`),
+      campoTxt(stripAccentsJs(l.complemento || ""), `complemento da linha ${index + 1}`),
+      campoTxt(l.iniciaLote, `início de lote da linha ${index + 1}`),
+      campoTxt(l.codigoEmp, `código da empresa da linha ${index + 1}`),
+      campoTxt(l.centroCustoDebito, `centro de custo débito da linha ${index + 1}`),
+      campoTxt(l.centroCustoCredito, `centro de custo crédito da linha ${index + 1}`),
+    ].join(";");
+  });
+}
+
+function buildBaixaLines(linhas, tipo, avisos) {
   return linhas.map((l, index) => {
     const base = [
       campoTxt(l.numero, `número do título da linha ${index + 1}`, true),
-      documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`),
+      documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`, false, avisos),
       dataTxt(l.vencimento, `vencimento da linha ${index + 1}`, false),
       dataTxt(l.databaixa, `data da baixa da linha ${index + 1}`),
       fmtValorTxt(l.valor),
@@ -302,9 +402,9 @@ function buildBaixaLines(linhas, tipo) {
   });
 }
 
-function buildServicoPrestLines(linhas) {
+function buildServicoPrestLines(linhas, avisos) {
   return linhas.map((l, index) => [
-    documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`, true),
+    documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`, true, avisos),
     // Razão social, UF e município NÃO são obrigatórios: o cliente já existe no cadastro do
     // Domínio e o CNPJ sozinho o identifica. Preenchidos, o Domínio tenta validar/atualizar o
     // cadastro e recusa o arquivo ("Município do cliente inválido"). Bari e Mantovani, que
@@ -381,11 +481,12 @@ function buildArquivoGerado(spec) {
   const nomeArquivo = FILE_NAMES[spec && spec.tipo];
   if (!nomeArquivo || !Array.isArray(spec.linhas) || spec.linhas.length === 0) return null;
 
+  const avisos = [];
   let lines;
   if (spec.tipo === "lanctos") lines = buildLanctosLines(spec.linhas);
   else if (spec.tipo === "baixa_ent" || spec.tipo === "baixa_sai" || spec.tipo === "baixa_ser") {
-    lines = buildBaixaLines(spec.linhas, spec.tipo);
-  } else if (spec.tipo === "servico_prest") lines = buildServicoPrestLines(spec.linhas);
+    lines = buildBaixaLines(spec.linhas, spec.tipo, avisos);
+  } else if (spec.tipo === "servico_prest") lines = buildServicoPrestLines(spec.linhas, avisos);
   else return null;
 
   const content = lines.join("\r\n") + "\r\n";
@@ -399,6 +500,7 @@ function buildArquivoGerado(spec) {
     // "de antes", senão ela conferiria uma coisa e o Domínio receberia outra.
     colunas: COLUNAS_ARQUIVO[spec.tipo] || [],
     celulas: lines.map((l) => l.split(";")),
+    avisos,
   };
 }
 
@@ -539,6 +641,7 @@ Qual delas gostaria de importar primeiro?"
 Quando o usuário escolher um (pelo número ou nome), na sua PRÓXIMA resposta: confirme em texto curto (ex: "Aqui está o arquivo, revise antes de importar.") e inclua a tag oculta {{GERAR_ARQUIVO:{...}}} com um objeto JSON válido (não explique nem mostre a tag ao usuário, ela vira um botão de download de verdade automaticamente). NUNCA escreva as linhas/lançamentos por extenso no texto da resposta (nada de listar data, valor, débito/crédito etc. linha por linha na mensagem) — essa informação já vai dentro do arquivo gerado, repetir é redundante; o texto da resposta deve ser só a confirmação curta. Nunca invente uma linha que não foi confirmada na conversa. Formato do objeto, por tipo:
 
 - Lançamentos: {"tipo":"lanctos","linhas":[{"data":"DD/MM/AAAA","debito":"código","credito":"código","valor":0,"codHist":"","complemento":"texto","iniciaLote":"1 ou vazio","codigoEmp":"código","centroCustoDebito":"","centroCustoCredito":""}]}
+  PARTIDAS MÚLTIPLAS (um valor rateado em várias contas): monte um lote. A primeira linha do lote leva "iniciaLote": "1"; as linhas seguintes, até o próximo "1", pertencem a ele. Só dentro de um lote uma linha pode ter apenas "debito" ou apenas "credito" (deixe o outro em branco), e a soma dos débitos do lote tem que ser igual à soma dos créditos — senão o arquivo é recusado. Lançamento simples (uma conta a débito e outra a crédito) não precisa de lote.
   HISTÓRICO (campo "complemento") — NÃO invente a redação. Cada empresa tem um padrão de histórico próprio, que já está no Diário dela (no histórico de relatórios processados): use a MESMA redação que aparece lá pra aquele tipo de lançamento, copiando o jeito de escrever (abreviações, ordem das palavras, se cita nome de fornecedor/sócio, se cita número de documento). Quando for um tipo de lançamento que ainda não existe no Diário, siga o estilo dos históricos parecidos que já existem e confirme com o usuário antes de fechar o arquivo, em vez de inventar um texto novo do seu jeito.
 - Baixa de Entradas: {"tipo":"baixa_ent","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0}]}
 - Baixa de Saídas: {"tipo":"baixa_sai","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0,"pis":0,"cofins":0,"csll":0,"irrf":0}]}
@@ -884,6 +987,11 @@ exports.assistenteChat = onCall(
     }
     if (errosGeracao.length > 0) {
       text += `\n\n⚠️ Não gerei o arquivo porque encontrei dados inválidos: ${errosGeracao.join("; ")}. Revise essas informações e tente novamente.`;
+    }
+    // avisos não impedem o arquivo, mas precisam aparecer pra quem vai importar
+    const avisosGeracao = [...new Set(arquivosGerados.flatMap((a) => a.avisos || []))];
+    if (avisosGeracao.length > 0) {
+      text += `\n\n⚠️ Gerei o arquivo, mas confira antes de importar: ${avisosGeracao.join("; ")}.`;
     }
 
     // Estado do fechamento da competência: a IA informa o que recebeu e quantas pendências
