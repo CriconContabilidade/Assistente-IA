@@ -520,10 +520,10 @@ function buildArquivoGerado(spec) {
     linhas: spec.linhas.length,
     tipo: spec.tipo,
     titulo: TITULOS_ARQUIVO[spec.tipo] || spec.tipo,
-    // A grade mostra exatamente o que foi gravado no arquivo, já formatado — não os dados
-    // "de antes", senão ela conferiria uma coisa e o Domínio receberia outra.
+    // A tela monta a grade de conferência lendo o próprio arquivo (base64), então ela mostra
+    // exatamente o que vai pro Domínio. Não guardar as células aqui: seriam uma lista de
+    // listas, que o Firestore recusa — e a resposta inteira deixava de ser gravada.
     colunas: COLUNAS_ARQUIVO[spec.tipo] || [],
-    celulas: lines.map((l) => l.split(";")),
     avisos,
   };
 }

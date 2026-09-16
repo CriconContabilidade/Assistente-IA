@@ -1306,7 +1306,18 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   // tomar a conversa inteira; um clique abre.
   function renderConferencia(arquivo) {
     const colunas = Array.isArray(arquivo.colunas) ? arquivo.colunas : [];
-    const celulas = Array.isArray(arquivo.celulas) ? arquivo.celulas : [];
+    // As células saem do próprio arquivo: o base64 está em Latin-1 (como o Domínio lê), e o
+    // atob devolve exatamente um caractere por byte. ";" nunca aparece dentro de um campo —
+    // o gerador troca por " - " — então dividir por ";" é seguro.
+    let celulas = [];
+    try {
+      celulas = atob(String(arquivo.base64 || ''))
+        .split(/\r?\n/)
+        .filter((linha) => linha !== '')
+        .map((linha) => linha.split(';'));
+    } catch (err) {
+      console.warn('Não deu pra montar a conferência de', arquivo.nome, err);
+    }
     if (!colunas.length || !celulas.length) return null;
 
     const caixa = document.createElement('div');
@@ -1604,13 +1615,22 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const t = document.createElement('div');
     t.className = 'msg assistant';
     t.id = 'typingIndicator';
-    t.innerHTML = `
-      <div class="msg-avatar">✨</div>
-      <div class="msg-bubble">
-        <div class="typing"><span></span><span></span><span></span></div>
-        <div class="typing-label" id="typingLabel">${typingLabelText}</div>
-      </div>
-    `;
+    // montado pelo DOM e não por template: o balão usa white-space: pre-wrap, e as quebras e
+    // a indentação de um template HTML viravam linhas em branco, esticando o "Pensando..."
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-avatar';
+    avatar.textContent = '✨';
+    const bubble = document.createElement('div');
+    bubble.className = 'msg-bubble';
+    const dots = document.createElement('div');
+    dots.className = 'typing';
+    dots.append(document.createElement('span'), document.createElement('span'), document.createElement('span'));
+    const label = document.createElement('div');
+    label.className = 'typing-label';
+    label.id = 'typingLabel';
+    label.textContent = typingLabelText;
+    bubble.append(dots, label);
+    t.append(avatar, bubble);
     chatBody.appendChild(t);
   }
 
