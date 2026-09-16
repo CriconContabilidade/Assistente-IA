@@ -1,0 +1,13 @@
+{
+  "name": "stagiario-teste-regras",
+  "private": true,
+  "description": "Testa as regras do Firestore do Stagiario no emulador (admin x funcionário)",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project demo-stagiario \"node test.js\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.0",
+    "firebase": "^12.0.0",
+    "firebase-tools": "^15.0.0"
+  }
+}

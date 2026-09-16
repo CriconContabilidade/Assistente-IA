@@ -1,5 +1,6 @@
 functions/node_modules/
 worker/node_modules/
+tests/**/node_modules/
 worker/.wrangler/
 worker/dist/
 **/key.txt
