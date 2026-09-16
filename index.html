@@ -724,7 +724,7 @@
   import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import {
     getFirestore, collection, doc, addDoc, setDoc, deleteDoc, updateDoc,
-    onSnapshot, query, orderBy, serverTimestamp, arrayUnion, limit
+    onSnapshot, query, orderBy, where, serverTimestamp, arrayUnion, limit
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 
@@ -792,6 +792,7 @@
       if (unsubEmpresas) { unsubEmpresas(); unsubEmpresas = null; }
       if (unsubMessages) { unsubMessages(); unsubMessages = null; }
       if (unsubDocs) { unsubDocs(); unsubDocs = null; }
+      if (unsubFechamento) { unsubFechamento(); unsubFechamento = null; }
       activeEmpresaId = null;
       loginScreen.style.display = 'flex';
       appEl.classList.remove('show');
@@ -905,26 +906,78 @@
   let activeEmpresaId = null;
   let seeded = false;
 
+  function aplicarListaEmpresas() {
+    renderEmpresaList(empresaSearch.value);
+    if (activeEmpresaId) {
+      const still = empresas.find(e => e.id === activeEmpresaId);
+      if (still) renderNotes(still);
+    }
+    seedNotesFromHub();
+  }
+
+  // A lista do funcionário é buscada por igualdade exata no e-mail em minúsculas (ou vazio).
+  // Empresa gravada antes disso — e-mail com maiúscula, ou sem o campo — sumiria da lista
+  // dele. Como o admin enxerga tudo, é o app dele que acerta esses cadastros ao abrir.
+  const responsaveisNormalizados = new Set();
+  async function normalizarResponsaveis() {
+    for (const emp of empresas) {
+      if (responsaveisNormalizados.has(emp.id)) continue;
+      const atual = emp.responsavelEmail;
+      const certo = typeof atual === 'string' ? atual.trim().toLowerCase() : '';
+      if (atual === certo) continue;
+      responsaveisNormalizados.add(emp.id);
+      try {
+        await updateDoc(doc(db, "assistenteIA_empresas", emp.id), { responsavelEmail: certo });
+      } catch (err) {
+        console.warn("Não deu pra ajustar o responsável de", emp.nome, err);
+      }
+    }
+  }
+
   function initEmpresas() {
     if (unsubEmpresas) unsubEmpresas();
-    unsubEmpresas = onSnapshot(query(empresasCol, orderBy("nome")), async (snap) => {
-      empresas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      if (!seeded && empresas.length === 0) {
-        seeded = true;
-        for (const nome of SEED_EMPRESAS) {
-          await addDoc(empresasCol, { nome, notas: [], responsavelEmail: "", criadoEm: serverTimestamp() });
+
+    if (isAdmin) {
+      unsubEmpresas = onSnapshot(query(empresasCol, orderBy("nome")), async (snap) => {
+        empresas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        // só admin semeia: pra um funcionário, lista vazia só quer dizer que nada foi
+        // atribuído a ele — semear ali criaria as empresas iniciais em duplicidade
+        if (!seeded && empresas.length === 0) {
+          seeded = true;
+          for (const nome of SEED_EMPRESAS) {
+            await addDoc(empresasCol, { nome, notas: [], responsavelEmail: "", criadoEm: serverTimestamp() });
+          }
+          return; // o próprio onSnapshot vai disparar de novo com os dados criados
         }
-        return; // o próprio onSnapshot vai disparar de novo com os dados criados
-      }
-      renderEmpresaList(empresaSearch.value);
-      if (activeEmpresaId) {
-        const still = empresas.find(e => e.id === activeEmpresaId);
-        if (still) renderNotes(still);
-      }
-      seedNotesFromHub();
-    }, err => {
-      console.warn("Firestore indisponível:", err);
-    });
+        normalizarResponsaveis();
+        aplicarListaEmpresas();
+      }, err => {
+        console.warn("Firestore indisponível:", err);
+      });
+      return;
+    }
+
+    // As regras do Firestore só deixam um funcionário ler empresa sem responsável ou dele
+    // mesmo, e recusam uma consulta que possa trazer outra coisa. Por isso são duas consultas
+    // por igualdade, juntadas aqui — sem orderBy, que exigiria índice composto; a ordem por
+    // nome é feita no navegador.
+    const email = (currentUserEmail || "").trim().toLowerCase();
+    const partes = { livres: [], minhas: [] };
+    const juntar = () => {
+      const porId = new Map();
+      [...partes.livres, ...partes.minhas].forEach(e => porId.set(e.id, e));
+      empresas = [...porId.values()].sort((a, b) =>
+        String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR'));
+      aplicarListaEmpresas();
+    };
+    const ouvir = (chave, valor) => onSnapshot(
+      query(empresasCol, where("responsavelEmail", "==", valor)),
+      (snap) => { partes[chave] = snap.docs.map(d => ({ id: d.id, ...d.data() })); juntar(); },
+      (err) => console.warn("Firestore indisponível:", err)
+    );
+    const unsubs = [ouvir('livres', "")];
+    if (email) unsubs.push(ouvir('minhas', email));
+    unsubEmpresas = () => unsubs.forEach(u => u());
   }
 
   // Preenche as observações de largada com o que já está documentado no Hub, só na primeira
@@ -1021,7 +1074,7 @@
       defaultValue: emp.responsavelEmail || ""
     });
     if (val === null) return;
-    await updateDoc(doc(db, "assistenteIA_empresas", emp.id), { responsavelEmail: val.trim() });
+    await updateDoc(doc(db, "assistenteIA_empresas", emp.id), { responsavelEmail: val.trim().toLowerCase() });
   }
 
   function renderEmpresaList(filter = "") {
