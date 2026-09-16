@@ -628,14 +628,15 @@ exports.assistenteChat = onCall(
     // Competência mais recente — é o que a IA vê como "fechamento em andamento"
     let fechamentoAtual = null;
     try {
+      // sem orderBy por id decrescente, que o Firestore não suporta: são poucas competências
+      // (uma por mês), então escolhe a maior aqui — o id "AAAA-MM" ordena como texto
       const fechamentosSnap = await db
         .collection("assistenteIA_empresas")
         .doc(empresaId)
         .collection("fechamentos")
-        .orderBy("__name__", "desc")
-        .limit(1)
         .get();
-      if (!fechamentosSnap.empty) fechamentoAtual = fechamentosSnap.docs[0].data();
+      const maisRecente = fechamentosSnap.docs.reduce((acc, d) => (!acc || d.id > acc.id ? d : acc), null);
+      if (maisRecente) fechamentoAtual = maisRecente.data();
     } catch (err) {
       console.error("Erro carregando fechamento:", err);
     }

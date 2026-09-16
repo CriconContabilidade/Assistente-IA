@@ -724,7 +724,7 @@
   import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import {
     getFirestore, collection, doc, addDoc, setDoc, deleteDoc, updateDoc,
-    onSnapshot, query, orderBy, where, serverTimestamp, arrayUnion, limit
+    onSnapshot, query, orderBy, where, serverTimestamp, arrayUnion
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 
@@ -1261,10 +1261,12 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     if (unsubFechamento) { unsubFechamento(); unsubFechamento = null; }
     renderPainelFechamento(null);
     if (!activeEmpresaId) return;
-    // competência mais recente primeiro — o id é "AAAA-MM", então ordenar por nome basta
+    // O Firestore não ordena por id de trás pra frente, então vêm todas as competências (uma
+    // por mês, poucas) e a mais recente é escolhida aqui — o id "AAAA-MM" ordena como texto.
     const col = collection(db, "assistenteIA_empresas", activeEmpresaId, "fechamentos");
-    unsubFechamento = onSnapshot(query(col, orderBy("__name__", "desc"), limit(1)), (snap) => {
-      renderPainelFechamento(snap.empty ? null : snap.docs[0].data());
+    unsubFechamento = onSnapshot(col, (snap) => {
+      const maisRecente = snap.docs.reduce((acc, d) => (!acc || d.id > acc.id ? d : acc), null);
+      renderPainelFechamento(maisRecente ? maisRecente.data() : null);
     }, (err) => {
       console.error('Erro ouvindo fechamento:', err);
       renderPainelFechamento(null);
