@@ -689,7 +689,7 @@
       <label class="modal-label" for="modalCodigo">Código no Domínio</label>
       <input type="text" id="modalCodigo" placeholder="ex: 185" inputmode="numeric">
       <label class="modal-label" for="modalCnpj">CNPJ</label>
-      <input type="text" id="modalCnpj" placeholder="00.000.000/0000-00" inputmode="numeric">
+      <input type="text" id="modalCnpj" placeholder="00.000.000/0000-00" autocapitalize="characters">
       <div class="modal-dica">Dá pra deixar em branco e preencher depois — a IA usa esses dados nos arquivos de importação.</div>
     </div>
     <div class="modal-actions">
@@ -1142,7 +1142,9 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       // guardados já no cadastro: são os dados que a IA precisa pra montar os arquivos, e
       // buscá-los pelo nome no banco compartilhado falha quando o nome não bate exatamente
       codigoDominio: (dados.codigo || "").replace(/\D/g, ""),
-      cnpj: (dados.cnpj || "").replace(/\D/g, ""),
+      // mantém letras (CNPJ alfanumérico da Receita); o backend decide na hora de usar se é
+      // um CNPJ alfanumérico válido ou se fica só com os números
+      cnpj: (dados.cnpj || "").toUpperCase().replace(/[^0-9A-Z]/g, ""),
       notas: [],
       responsavelEmail: "",
       criadoEm: serverTimestamp(),

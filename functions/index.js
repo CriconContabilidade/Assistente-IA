@@ -32,7 +32,7 @@ async function ensureCibeleAuth() {
 
 // Verifica se um fornecedor/cliente já existe no cadastro compartilhado (por CNPJ/CPF).
 async function lookupEntidade(cnpj) {
-  const digits = (cnpj || "").replace(/\D/g, "");
+  const digits = normalizarDocumento(cnpj);
   if (!digits) return null;
   await ensureCibeleAuth();
   const snap = await clientGetDoc(clientDoc(cibeleDb, "clientes", digits));
@@ -245,6 +245,7 @@ function dataTxt(valor, nome, obrigatorio = true) {
 
 function validarCnpjCpfDv(digits) {
   if (digits.length === 11) {
+    if (!/^\d{11}$/.test(digits)) return false;
     if (/^(\d)\1{10}$/.test(digits)) return false;
     let soma = 0;
     for (let i = 0; i < 9; i++) soma += Number(digits[i]) * (10 - i);
@@ -257,16 +258,22 @@ function validarCnpjCpfDv(digits) {
     if (resto === 10 || resto === 11) resto = 0;
     return resto === Number(digits[10]);
   } else if (digits.length === 14) {
-    if (/^(\d)\1{13}$/.test(digits)) return false;
+    // CNPJ alfanumérico (Receita, a partir de jul/2026): as 12 primeiras posições podem ter
+    // letras, os 2 dígitos verificadores continuam numéricos. Cada caractere vale o código
+    // ASCII menos 48 — pra algarismo isso dá o próprio número, então o CNPJ numérico antigo
+    // é calculado exatamente como antes.
+    if (!/^[0-9A-Z]{12}\d{2}$/.test(digits)) return false;
+    if (/^(.)\1{13}$/.test(digits)) return false;
+    const valor = (c) => c.charCodeAt(0) - 48;
     const pesos1 = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
     let soma = 0;
-    for (let i = 0; i < 12; i++) soma += Number(digits[i]) * pesos1[i];
+    for (let i = 0; i < 12; i++) soma += valor(digits[i]) * pesos1[i];
     let resto = soma % 11;
     const dv1 = resto < 2 ? 0 : 11 - resto;
     if (dv1 !== Number(digits[12])) return false;
     const pesos2 = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2];
     soma = 0;
-    for (let i = 0; i < 13; i++) soma += Number(digits[i]) * pesos2[i];
+    for (let i = 0; i < 13; i++) soma += valor(digits[i]) * pesos2[i];
     resto = soma % 11;
     const dv2 = resto < 2 ? 0 : 11 - resto;
     return dv2 === Number(digits[13]);
@@ -276,14 +283,31 @@ function validarCnpjCpfDv(digits) {
 
 // Em branco é válido quando o campo não é obrigatório: nas baixas o título já é identificado
 // pelo número, e é comum o CNPJ vir vazio. Se vier preenchido, aí sim tem que estar certo.
+// Deixa o CNPJ/CPF só com o que importa. As letras só são mantidas quando o resultado é um
+// CNPJ alfanumérico válido (formato E dígito verificador); em qualquer outro caso fica só com
+// os números, exatamente como antes — assim "CPF 123.456.789-09" continua virando o CPF, e
+// nenhum documento numérico muda de tratamento.
+function normalizarDocumento(valor) {
+  const texto = String(valor ?? "");
+  const alfanumerico = texto.toUpperCase().replace(/[^0-9A-Z]/g, "");
+  if (/[A-Z]/.test(alfanumerico) && alfanumerico.length === 14 && validarCnpjCpfDv(alfanumerico)) {
+    return alfanumerico;
+  }
+  return texto.replace(/\D/g, "");
+}
+
 function documentoTxt(valor, nome = "CNPJ/CPF", obrigatorio = false, avisos = null) {
-  const digits = String(valor ?? "").replace(/\D/g, "");
+  const digits = normalizarDocumento(valor);
   if (!digits) {
     if (obrigatorio) throw new Error(`Campo obrigatório ausente: ${nome}`);
     return "";
   }
   if (digits.length !== 11 && digits.length !== 14) {
-    throw new Error(`${nome} deve ter 11 ou 14 dígitos`);
+    const alfanumerico = String(valor ?? "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+    if (/[A-Z]/.test(alfanumerico) && /^[0-9A-Z]{12}\d{2}$/.test(alfanumerico)) {
+      throw new Error(`${nome} (${alfanumerico}) parece um CNPJ alfanumérico, mas o dígito verificador não confere`);
+    }
+    throw new Error(`${nome} deve ter 11 (CPF) ou 14 (CNPJ) caracteres`);
   }
   if (!validarCnpjCpfDv(digits)) {
     // não bloqueia: pode ser erro de leitura do relatório, mas pode ser o CNPJ certo com
@@ -795,7 +819,7 @@ exports.assistenteChat = onCall(
     // fica de fora do cache de propósito — ela muda toda vez.
     const systemPrompt = [{
       type: "text",
-      text: buildSystemPrompt(empresa.nome, empresa.notas, documentos, { codigo: empresa.codigoDominio, cnpj: empresa.cnpj }, fechamentoAtual),
+      text: buildSystemPrompt(empresa.nome, empresa.notas, documentos, { codigo: empresa.codigoDominio, cnpj: normalizarDocumento(empresa.cnpj) }, fechamentoAtual),
       cache_control: { type: "ephemeral" },
     }];
     const fimDoHistorico = messages[messages.length - 2];
@@ -917,8 +941,8 @@ exports.assistenteChat = onCall(
         // O cadastro da própria empresa no app vem primeiro: é preenchido na criação e não
         // depende do nome bater exatamente com o do banco compartilhado ("MV" x "M.V. A BENS
         // LTDA - EPP"). Só cai na busca por nome se faltar algum dos dois dados aqui.
-        let empresaEncontrada = (empresa.codigoDominio && empresa.cnpj)
-          ? { codigo: empresa.codigoDominio, cnpj: empresa.cnpj }
+        let empresaEncontrada = (empresa.codigoDominio && normalizarDocumento(empresa.cnpj))
+          ? { codigo: empresa.codigoDominio, cnpj: normalizarDocumento(empresa.cnpj) }
           : null;
         if (!empresaEncontrada) {
           try {
