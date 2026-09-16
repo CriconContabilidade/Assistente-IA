@@ -1556,10 +1556,20 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
 
     const filesToSend = pendingFiles.slice();
     const fileNames = filesToSend.map(f => f.name);
+    // Respostas que geraram arquivo levam uma marca no histórico: sem ela a IA relia as
+    // próprias frases "aqui está o arquivo" como se bastasse dizer isso, e parava de gerar.
     const history = currentMessages
       .filter(m => m && typeof m.text === 'string' && m.text.trim())
       .slice(-80)
-      .map(m => ({ role: m.role, text: m.text }));
+      .map(m => {
+        const gerados = Array.isArray(m.arquivosGerados)
+          ? m.arquivosGerados.map(a => a && a.nome).filter(Boolean)
+          : [];
+        const text = m.role === 'assistant' && gerados.length
+          ? `${m.text}\n\n[Registro do sistema: nesta resposta a ferramenta gerar_arquivo foi chamada e gerou ${gerados.join(', ')}.]`
+          : m.text;
+        return { role: m.role, text };
+      });
     const msgsCol = collection(db, "assistenteIA_empresas", empresaIdEnvio, "mensagens");
     isSending = true;
     setComposerBusy(true);
