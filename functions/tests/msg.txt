@@ -1,0 +1,29 @@
+Aqui está o arquivo de Lançamentos de novo, revise antes de importar.
+
+{{GERAR_ARQUIVO:{"tipo":"lanctos","linhas":[
+{"data":"06/08/2026","debito":"778","credito":"7","valor":4080.36,"codHist":"","complemento":"Aplicacao BB RF Simples Agil","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"06/08/2026","debito":"262","credito":"770","valor":13500,"codHist":"","complemento":"Provisao distribuicao lucros Mirian","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"06/08/2026","debito":"262","credito":"769","valor":13500,"codHist":"","complemento":"Provisao distribuicao lucros Ubirajara","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"06/08/2026","debito":"262","credito":"768","valor":13500,"codHist":"","complemento":"Provisao distribuicao lucros Vania","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"06/08/2026","debito":"262","credito":"17","valor":6750,"codHist":"","complemento":"Provisao distribuicao lucros Ligia","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"06/08/2026","debito":"262","credito":"18","valor":6750,"codHist":"","complemento":"Provisao distribuicao lucros Cesar","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"06/08/2026","debito":"770","credito":"7","valor":13500,"codHist":"","complemento":"Pagamento distribuicao lucros Mirian","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"06/08/2026","debito":"769","credito":"7","valor":13500,"codHist":"","complemento":"Pagamento distribuicao lucros Ubirajara","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"06/08/2026","debito":"768","credito":"7","valor":13500,"codHist":"","complemento":"Pagamento distribuicao lucros Vania","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"06/08/2026","debito":"17","credito":"7","valor":6750,"codHist":"","complemento":"Pagamento distribuicao lucros Ligia","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"06/08/2026","debito":"18","credito":"7","valor":6750,"codHist":"","complemento":"Pagamento distribuicao lucros Cesar","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"10/08/2026","debito":"384","credito":"7","valor":93.10,"codHist":"","complemento":"Tarifa bancaria","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"10/08/2026","debito":"7","credito":"778","valor":793.10,"codHist":"","complemento":"Resgate aplicacao BB RF Simples Agil","iniciaLote":"1","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"10/08/2026","debito":"60","credito":"778","valor":1.90,"codHist":"","complemento":"IRRF resgate aplicacao","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"25/08/2026","debito":"63","credito":"7","valor":22,"codHist":"","complemento":"Condominio Edif Acqua Sl 2","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"25/08/2026","debito":"384","credito":"7","valor":1,"codHist":"","complemento":"Tarifa bancaria pix","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"25/08/2026","debito":"7","credito":"778","valor":23,"codHist":"","complemento":"Resgate aplicacao BB RF Simples Agil","iniciaLote":"1","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"25/08/2026","debito":"60","credito":"778","valor":0.08,"codHist":"","complemento":"IRRF resgate aplicacao","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""},
+{"data":"31/08/2026","debito":"778","credito":"395","valor":70.44,"codHist":"","complemento":"Rendimento aplicacao financeira","iniciaLote":"","codigoEmp":"185","centroCustoDebito":"","centroCustoCredito":""}
+]}}
+
+Essas são as importações disponíveis até o momento:
+1 - Baixa de Serviços (recebimento MPF/MPU)
+2 - Baixa de Entradas (pagamento Cricon)
+
+Qual delas gostaria de importar primeiro?

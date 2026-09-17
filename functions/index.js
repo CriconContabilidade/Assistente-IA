@@ -216,6 +216,17 @@ function fmtValorOpcionalTxt(n) {
   return fmtValorTxt(n);
 }
 
+// Pro valor principal de um lançamento (valor do lanctos/baixa, valor dos serviços da NFS):
+// ausente NÃO pode virar "0" silenciosamente — isso geraria um lançamento de R$0,00 de
+// verdade no Domínio sem nenhum aviso. fmtValorTxt continua aceitando ausência pra juros,
+// multa, desconto e impostos, que legitimamente têm 0 como padrão.
+function valorObrigatorioTxt(n, nome) {
+  if (n === null || n === undefined || n === "") {
+    throw new Error(`Campo obrigatório ausente: ${nome}`);
+  }
+  return fmtValorTxt(n);
+}
+
 function campoTxt(valor, nome, obrigatorio = false) {
   let texto = String(valor ?? "").trim().replace(/[\r\n]+/g, " ");
   if (texto.includes(";")) {
@@ -281,18 +292,33 @@ function validarCnpjCpfDv(digits) {
   return false;
 }
 
+// Uma letra colada direto num dígito, sem nada entre os dois (nem espaço, nem pontuação), só
+// acontece de propósito dentro de um CNPJ alfanumérico de verdade (ex.: o "01DE" no meio de
+// "12.ABC.345/01DE-35"). Um rótulo escrito por humano ("CPF 529...", "CNPJ: 43.617...", "Doc
+// nº 123...") sempre tem a palavra separada do número por espaço ou dois-pontos — nunca letra
+// grudada em dígito. É essa a distinção usada abaixo, não "tem letra ou não".
+function temLetraColadaEmDigito(texto) {
+  for (let i = 0; i < texto.length - 1; i++) {
+    const a = texto[i], b = texto[i + 1];
+    if ((/[A-Za-z]/.test(a) && /[0-9]/.test(b)) || (/[0-9]/.test(a) && /[A-Za-z]/.test(b))) return true;
+  }
+  return false;
+}
+
 // Em branco é válido quando o campo não é obrigatório: nas baixas o título já é identificado
 // pelo número, e é comum o CNPJ vir vazio. Se vier preenchido, aí sim tem que estar certo.
-// Deixa o CNPJ/CPF só com o que importa. As letras só são mantidas quando o resultado é um
-// CNPJ alfanumérico válido (formato E dígito verificador); em qualquer outro caso fica só com
-// os números, exatamente como antes — assim "CPF 123.456.789-09" continua virando o CPF, e
-// nenhum documento numérico muda de tratamento.
+// Deixa o CNPJ/CPF só com o que importa. Só trata como possível CNPJ alfanumérico (retorna com
+// letra e tudo, sem cair no fallback de só dígitos) quando há letra colada em dígito — rótulo
+// solto ("CPF 529...", "ISENTO") continua virando só dígitos, exatamente como sempre foi.
+// Antes, QUALQUER letra sobrando (rótulo ou não) caía direto pro fallback de só dígitos: um
+// CNPJ alfanumérico digitado errado por OCR (ex. "ABC52998224725") virava silenciosamente
+// "52998224725", que por coincidência pode ser o CPF válido de OUTRA pessoa — sem aviso nenhum,
+// o sistema consultava/gravava o documento errado. Agora documentoTxt() dá erro explícito nesse
+// caso, sem afetar nenhum rótulo real usado no dia a dia.
 function normalizarDocumento(valor) {
   const texto = String(valor ?? "");
   const alfanumerico = texto.toUpperCase().replace(/[^0-9A-Z]/g, "");
-  if (/[A-Z]/.test(alfanumerico) && alfanumerico.length === 14 && validarCnpjCpfDv(alfanumerico)) {
-    return alfanumerico;
-  }
+  if (/[A-Z]/.test(alfanumerico) && temLetraColadaEmDigito(texto)) return alfanumerico;
   return texto.replace(/\D/g, "");
 }
 
@@ -302,11 +328,16 @@ function documentoTxt(valor, nome = "CNPJ/CPF", obrigatorio = false, avisos = nu
     if (obrigatorio) throw new Error(`Campo obrigatório ausente: ${nome}`);
     return "";
   }
-  if (digits.length !== 11 && digits.length !== 14) {
-    const alfanumerico = String(valor ?? "").toUpperCase().replace(/[^0-9A-Z]/g, "");
-    if (/[A-Z]/.test(alfanumerico) && /^[0-9A-Z]{12}\d{2}$/.test(alfanumerico)) {
-      throw new Error(`${nome} (${alfanumerico}) parece um CNPJ alfanumérico, mas o dígito verificador não confere`);
+  if (/[A-Z]/.test(digits)) {
+    // Só chega aqui como tentativa de CNPJ alfanumérico. Formato ou dígito verificador errado
+    // aqui é erro (não aviso) — ao contrário do CPF/CNPJ numérico, não tem "cadastro torto no
+    // Domínio" que explique uma letra fora do lugar; é sinal de leitura/OCR errado do relatório.
+    if (!/^[0-9A-Z]{12}\d{2}$/.test(digits) || !validarCnpjCpfDv(digits)) {
+      throw new Error(`${nome} (${digits}) parece um CNPJ alfanumérico, mas o dígito verificador não confere`);
     }
+    return digits;
+  }
+  if (digits.length !== 11 && digits.length !== 14) {
     throw new Error(`${nome} deve ter 11 (CPF) ou 14 (CNPJ) caracteres`);
   }
   if (!validarCnpjCpfDv(digits)) {
@@ -391,7 +422,7 @@ function buildLanctosLines(linhas) {
       dataTxt(l.data, `data da linha ${index + 1}`),
       debito,
       credito,
-      fmtValorTxt(l.valor),
+      valorObrigatorioTxt(l.valor, `valor da linha ${index + 1}`),
       campoTxt(l.codHist, `código do histórico da linha ${index + 1}`),
       campoTxt(stripAccentsJs(l.complemento || ""), `complemento da linha ${index + 1}`),
       campoTxt(l.iniciaLote, `início de lote da linha ${index + 1}`),
@@ -409,7 +440,7 @@ function buildBaixaLines(linhas, tipo, avisos) {
       documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`, false, avisos),
       dataTxt(l.vencimento, `vencimento da linha ${index + 1}`, false),
       dataTxt(l.databaixa, `data da baixa da linha ${index + 1}`),
-      fmtValorTxt(l.valor),
+      valorObrigatorioTxt(l.valor, `valor da linha ${index + 1}`),
       fmtValorTxt(l.juros || 0),
       fmtValorTxt(l.multa || 0),
       fmtValorTxt(l.desconto || 0),
@@ -443,7 +474,7 @@ function buildServicoPrestLines(linhas, avisos) {
     campoTxt(l.situacao ?? 0, `situação da linha ${index + 1}`, true),
     campoTxt(l.acumulador, `acumulador da linha ${index + 1}`, true),
     campoTxt(l.cfps, `CFPS da linha ${index + 1}`, true),
-    fmtValorTxt(l.valorServicos || 0),
+    valorObrigatorioTxt(l.valorServicos, `valor dos serviços da linha ${index + 1}`),
     fmtValorTxt(l.valorDescontos || 0),
     fmtValorOpcionalTxt(l.valorDeducao),
     fmtValorTxt(l.valorContabil ?? l.valorServicos ?? 0),

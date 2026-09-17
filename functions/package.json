@@ -6,6 +6,9 @@
   },
   "main": "index.js",
   "private": true,
+  "scripts": {
+    "test": "node tests/run-all.js"
+  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
     "exceljs": "^4.4.0",
