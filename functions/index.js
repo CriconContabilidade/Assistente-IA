@@ -2,6 +2,7 @@ const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getAuth: getAdminAuth } = require("firebase-admin/auth");
 const Anthropic = require("@anthropic-ai/sdk");
 const ExcelJS = require("exceljs");
 const { initializeApp: initClientApp } = require("firebase/app");
@@ -12,10 +13,20 @@ initializeApp();
 const db = getFirestore();
 
 // Mesma lista usada nas regras do Firestore (Banco-de-Horas/firestore.rules, isAdminPonto) e
-// no index.html — três cópias porque cada lugar decide algo diferente (regra de segurança,
-// UI, validação do backend) e nenhum dos três consegue ler os outros dois em runtime. Trocar
-// por custom claims eliminaria a duplicação, mas é mudança maior (fase 3 da auditoria).
+// no index.html. O caminho de verdade agora é o custom claim "admin" (setado por
+// sincronizarClaimsAdmin, mais abaixo) — a lista aqui é só uma rede de segurança enquanto o
+// claim não foi confirmado em produção com login de verdade (custom claim só aparece no token
+// depois de um logout/login ou refreshToken forçado; sem esse fallback, uma sincronização mal
+// feita destrancaria ninguém como admin até alguém perceber). Depois de confirmar que os 3
+// admins têm o claim, dá pra tirar esse fallback e a lista sai só daqui — as outras duas cópias
+// (regras e index.html) precisam do e-mail de qualquer forma, pra UI e pra regra funcionarem
+// sem depender de uma leitura extra ao Firestore.
 const ADMIN_EMAILS = ["contabilidadecricon@gmail.com", "guilherme.primetherapy@gmail.com", "rh@cricon.com.br"];
+function ehAdmin(request) {
+  const claimAdmin = request.auth && request.auth.token && request.auth.token.admin === true;
+  const email = (request.auth && request.auth.token && request.auth.token.email || "").toLowerCase();
+  return claimAdmin || ADMIN_EMAILS.includes(email);
+}
 
 // Mesmo banco de CNPJ compartilhado usado pelo Baixas-Parcelas e pelo Cadastro de Clientes e
 // Fornecedores — projeto separado, autenticação anônima (config já é pública/client-side).
@@ -876,7 +887,7 @@ exports.assistenteChat = onCall(
     // Mesma regra de visibilidade do front: admin vê tudo, os demais só a empresa deles
     // (ou sem responsável ainda). Reforça no backend o que a UI já esconde.
     const userEmail = (request.auth.token.email || "").toLowerCase();
-    const isAdmin = ADMIN_EMAILS.includes(userEmail);
+    const isAdmin = ehAdmin(request);
     const responsavel = (empresa.responsavelEmail || "").toLowerCase();
     if (!isAdmin && responsavel && responsavel !== userEmail) {
       throw new HttpsError("permission-denied", "Você não tem acesso a esta empresa.");
@@ -1522,8 +1533,7 @@ exports.seedObservacoesEmpresas = onCall(
   { cors: true, timeoutSeconds: 120, memory: "256MiB" },
   async (request) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "É preciso estar logado.");
-    const userEmail = (request.auth.token.email || "").toLowerCase();
-    if (!ADMIN_EMAILS.includes(userEmail)) {
+    if (!ehAdmin(request)) {
       throw new HttpsError("permission-denied", "Só admin pode rodar a semeadura de observações.");
     }
 
@@ -1557,5 +1567,43 @@ exports.seedObservacoesEmpresas = onCall(
       if (mudancas.length > 0) resultado.push({ empresa: emp.nome, mudancas });
     }
     return { empresasAtualizadas: resultado.length, detalhes: resultado };
+  }
+);
+
+// ---------------- custom claims de admin (item 6 da auditoria) ----------------
+// Hoje "quem é admin" é decidido comparando e-mail contra ADMIN_EMAILS em TRÊS lugares
+// separados (aqui, nas regras do Firestore, e no index.html) — trocar um admin exige lembrar
+// de editar os três. Custom claim no token de autenticação é uma fonte só: o Admin SDK seta
+// (só aqui, com a lista atual como ponto de partida), e as regras/frontend passam a checar
+// request.auth.token.admin / idTokenResult.claims.admin em vez de e-mail. A lista continua
+// existindo (é o "de quem" partir), mas TROCAR um admin no futuro passa a ser rodar esta
+// function de novo com uma lista atualizada, não editar três arquivos em três repositórios.
+exports.sincronizarClaimsAdmin = onCall(
+  { cors: true, timeoutSeconds: 60 },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "É preciso estar logado.");
+    if (!ehAdmin(request)) throw new HttpsError("permission-denied", "Só admin pode rodar isso.");
+
+    const auth = getAdminAuth();
+    const resultado = [];
+    for (const email of ADMIN_EMAILS) {
+      try {
+        const user = await auth.getUserByEmail(email);
+        if (user.customClaims && user.customClaims.admin === true) {
+          resultado.push({ email, status: "já tinha o claim" });
+          continue;
+        }
+        await auth.setCustomUserClaims(user.uid, { ...(user.customClaims || {}), admin: true });
+        resultado.push({ email, status: "claim adicionado agora" });
+      } catch (err) {
+        // comum na primeira vez: a pessoa nunca logou no Stagiario, então não existe usuário
+        // do Firebase Auth com esse e-mail ainda pra receber o claim.
+        resultado.push({ email, status: `não deu: ${err.message}` });
+      }
+    }
+    return {
+      resultado,
+      aviso: "Quem recebeu o claim agora precisa fazer logout e login de novo (ou dar um F5 depois de uns segundos) pra ele aparecer no token — custom claim só entra no token na próxima vez que ele é emitido.",
+    };
   }
 );

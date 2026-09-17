@@ -721,7 +721,7 @@
 
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-  import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence, getIdTokenResult } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import {
     getFirestore, collection, doc, addDoc, setDoc, deleteDoc, updateDoc,
     onSnapshot, query, orderBy, where, serverTimestamp, arrayUnion
@@ -764,7 +764,9 @@
   }
 
   // Mesma lista de administradores usada no Banco de Horas — quem está aqui vê todas as
-  // empresas e pode atribuir o responsável de cada uma; os demais só veem as suas.
+  // empresas e pode atribuir o responsável de cada uma; os demais só veem as suas. O custom
+  // claim "admin" (setado pela Cloud Function sincronizarClaimsAdmin) é o caminho de verdade;
+  // a lista fica como rede de segurança até o claim estar confirmado em produção.
   const ADMIN_EMAILS = ["contabilidadecricon@gmail.com", "guilherme.primetherapy@gmail.com", "rh@cricon.com.br"];
   function isAdminEmail(email) {
     return ADMIN_EMAILS.includes((email || "").trim().toLowerCase());
@@ -774,12 +776,20 @@
   let isAdmin = false;
   let unsubEmpresas = null;
 
-  onAuthStateChanged(auth, (user) => {
+  onAuthStateChanged(auth, async (user) => {
     if (user) {
       loginScreen.style.display = 'none';
       appEl.classList.add('show');
       currentUserEmail = user.email;
-      isAdmin = isAdminEmail(user.email);
+      let temClaimAdmin = false;
+      try {
+        const tokenResult = await getIdTokenResult(user);
+        temClaimAdmin = tokenResult.claims && tokenResult.claims.admin === true;
+      } catch (err) {
+        console.warn('Não deu pra checar o custom claim de admin, usando só a lista de e-mail', err);
+      }
+      isAdmin = temClaimAdmin || isAdminEmail(user.email);
+      sincronizarClaimsSeNecessario();
       userEmail.replaceChildren(document.createTextNode(user.email || ''));
       if (isAdmin) {
         const badge = document.createElement('span');
@@ -924,6 +934,21 @@
     } catch (err) {
       console.warn("Não deu pra rodar a semeadura de observações", err);
       seedJaDisparado = false; // deixa tentar de novo na próxima lista de empresas
+    }
+  }
+
+  // Dispara uma vez por login de admin: garante que os 3 e-mails admin tenham o custom claim
+  // (idempotente do lado do backend — repetir não faz nada de novo se já estiver sincronizado).
+  // Silencioso de propósito: a lista de e-mail continua valendo como rede de segurança mesmo
+  // se isso falhar, então não precisa incomodar o usuário com um erro aqui.
+  const sincronizarClaimsAdmin = httpsCallable(functionsClient, 'sincronizarClaimsAdmin', { timeout: 60000 });
+  async function sincronizarClaimsSeNecessario() {
+    if (!isAdmin) return;
+    try {
+      const r = await sincronizarClaimsAdmin();
+      console.log('Sincronização de custom claims admin:', r.data);
+    } catch (err) {
+      console.warn('Não deu pra sincronizar custom claims admin', err);
     }
   }
 

@@ -48,6 +48,10 @@ async function caso(nome, esperado, promessa) {
   // e-mail com maiúsculas no login: a regra baixa pra minúsculas
   const funcMaiusc = env.authenticatedContext('func2', { email: 'Func@Cricon.com.br' }).firestore();
   const anonimo = env.unauthenticatedContext().firestore();
+  // ninguém dessa conta está na lista de e-mail — só tem o custom claim "admin" (item 6 da
+  // auditoria: confirma que trocar quem é admin no futuro funciona só com o claim, sem
+  // precisar editar a lista de e-mail nas regras).
+  const adminPorClaim = env.authenticatedContext('admin-novo', { email: 'novo-admin@cricon.com.br', admin: true }).firestore();
   const col = (db) => collection(db, 'assistenteIA_empresas');
 
   console.log('ADMIN');
@@ -57,6 +61,12 @@ async function caso(nome, esperado, promessa) {
   await caso('volta o responsável', 'ok', updateDoc(doc(admin, 'assistenteIA_empresas/livre'), { responsavelEmail: '' }));
   await caso('lê mensagens de qualquer empresa', 'ok', getDocs(collection(admin, 'assistenteIA_empresas/alheia/mensagens')));
   await caso('corrige campo ausente (normalização)', 'ok', updateDoc(doc(admin, 'assistenteIA_empresas/semcampo'), { responsavelEmail: '' }));
+
+  console.log('\nADMIN SÓ POR CUSTOM CLAIM (item 6 da auditoria)');
+  await caso('lista todas as empresas mesmo sem estar na lista de e-mail', 'ok', getDocs(query(col(adminPorClaim), orderBy('nome'))));
+  await caso('lê empresa de qualquer responsável', 'ok', getDoc(doc(adminPorClaim, 'assistenteIA_empresas/alheia')));
+  await caso('troca o responsável de uma empresa', 'ok', updateDoc(doc(adminPorClaim, 'assistenteIA_empresas/alheia'), { responsavelEmail: FUNC }));
+  await caso('desfaz a troca (não deixa sujeira pros próximos casos)', 'ok', updateDoc(doc(adminPorClaim, 'assistenteIA_empresas/alheia'), { responsavelEmail: OUTRO }));
 
   console.log('FUNCIONÁRIO — lista (como o app consulta)');
   await caso('consulta "sem responsável"', 'ok', getDocs(query(col(func), where('responsavelEmail', '==', ''))));
