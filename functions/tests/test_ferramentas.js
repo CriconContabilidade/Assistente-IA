@@ -84,16 +84,18 @@ const falsos = {
   'firebase/app': { initializeApp: () => ({}) },
   'firebase/auth': { getAuth: () => ({}), signInAnonymously: async () => ({}) },
   'firebase/firestore': {
-    getFirestore: () => ({}), doc: () => ({}), collection: () => ({}), query: () => ({}),
+    getFirestore: () => ({}), collection: () => ({}), query: () => ({}),
     where: () => ({}), limit: () => ({}),
-    // cadastro compartilhado: só o CNPJ do BB existe
-    getDoc: async () => ({ exists: () => ultimoCnpjConsultado === '43617343000102', data: () => ({}) }),
+    // cadastro compartilhado: só o CNPJ do BB existe. O id vai DENTRO da referência (não numa
+    // variável global) pra funcionar certo com consultas em paralelo (Promise.all) — uma
+    // variável global compartilhada quebraria sob concorrência real, mesmo o código de
+    // produção estando correto (o SDK de verdade do Firestore não tem esse problema).
+    doc: (_db, _col, id) => ({ id }),
+    getDoc: async (ref) => ({ exists: () => ref.id === '43617343000102', data: () => ({}) }),
     getDocs: async () => ({ empty: true, docs: [] }),
   },
 };
-let ultimoCnpjConsultado = null;
 const fsFalso = falsos['firebase/firestore'];
-fsFalso.doc = (_db, _col, id) => { ultimoCnpjConsultado = id; return {}; };
 const carregarOriginal = Module._load;
 Module._load = function (req, parent, isMain) {
   if (req in falsos) return falsos[req];

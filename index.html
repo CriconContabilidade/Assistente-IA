@@ -1500,6 +1500,12 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         return { role: m.role, text };
       });
     const msgsCol = collection(db, "assistenteIA_empresas", empresaIdEnvio, "mensagens");
+    // Identifica esta mensagem de forma única: se o navegador der timeout (280s) antes da
+    // function (300s), o processamento original continua rodando e grava a resposta mesmo
+    // assim — sem esse id, tentar de novo geraria uma segunda chamada à IA (e um segundo
+    // arquivo/lançamento) pro mesmo pedido. O backend usa isso pra devolver a resposta já
+    // pronta em vez de reprocessar.
+    const requestId = crypto.randomUUID();
     isSending = true;
     setComposerBusy(true);
     showTyping(filesToSend.length > 0);
@@ -1510,7 +1516,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         base64: await fileToBase64(f)
       })));
 
-      await addDoc(msgsCol, { role: 'user', text, files: fileNames, criadoEm: serverTimestamp() });
+      await addDoc(msgsCol, { role: 'user', text, files: fileNames, criadoEm: serverTimestamp(), requestId });
       messageInput.value = "";
       messageInput.style.height = 'auto';
       pendingFiles = [];
@@ -1520,7 +1526,8 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         empresaId: empresaIdEnvio,
         message: text,
         history,
-        files: filesBase64
+        files: filesBase64,
+        requestId
       });
 
       hideTyping();
@@ -1529,6 +1536,9 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     } catch (err) {
       hideTyping();
       console.error('Erro chamando a IA:', err);
+      // "already-exists": outra chamada com o mesmo requestId já está processando (ex.: clique
+      // duplo) — não é um erro de verdade, a resposta de verdade já está a caminho no chat.
+      if (err && err.code === 'functions/already-exists') { isSending = false; setComposerBusy(false); return; }
       const msg = `Não consegui obter resposta da IA (${err && err.message ? err.message : 'erro desconhecido'}). Tente novamente em instantes.`;
       await addDoc(msgsCol, { role: 'assistant', text: `⚠️ ${msg}`, files: [], criadoEm: serverTimestamp() });
     } finally {

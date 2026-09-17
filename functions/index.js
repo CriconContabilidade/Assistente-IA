@@ -242,6 +242,21 @@ function campoTxt(valor, nome, obrigatorio = false) {
   return texto;
 }
 
+// Pra campo ESTRUTURAL (código de conta, número de título, código do histórico, CFPS,
+// acumulador, série, situação, centro de custo, código do item) — nunca sanitiza escondendo o
+// problema: um ";" nesses campos é sinal de dado corrompido (ex. dois códigos concatenados por
+// engano), e trocar por " - " silenciosamente gravaria um valor sem sentido na coluna, sem
+// avisar ninguém. campoTxt() continua certo pra texto livre (histórico, razão social, etc.),
+// onde ";" trocado por "-" é comportamento esperado, não um erro escondido.
+function campoEstruturalTxt(valor, nome, obrigatorio = false) {
+  const texto = String(valor ?? "").trim().replace(/[\r\n]+/g, " ");
+  if (texto.includes(";")) {
+    throw new Error(`${nome} não pode conter ";" (valor recebido: "${texto}") — parece dado corrompido`);
+  }
+  if (obrigatorio && !texto) throw new Error(`Campo obrigatório ausente: ${nome}`);
+  return texto;
+}
+
 // obrigatorio=false permite data em branco (ex.: vencimento de baixa, que nem sempre existe);
 // o que não se aceita é data preenchida em formato errado ou inexistente no calendário.
 function dataTxt(valor, nome, obrigatorio = true) {
@@ -419,8 +434,8 @@ function validarLotesLanctos(linhas) {
 function buildLanctosLines(linhas) {
   validarLotesLanctos(linhas);
   return linhas.map((l, index) => {
-    const debito = campoTxt(l.debito, `débito da linha ${index + 1}`, false);
-    const credito = campoTxt(l.credito, `crédito da linha ${index + 1}`, false);
+    const debito = campoEstruturalTxt(l.debito, `débito da linha ${index + 1}`, false);
+    const credito = campoEstruturalTxt(l.credito, `crédito da linha ${index + 1}`, false);
     if (!debito && !credito) {
       throw new Error(`Linha ${index + 1} de Lançamentos: informe ao menos a conta a débito ou a crédito.`);
     }
@@ -429,12 +444,12 @@ function buildLanctosLines(linhas) {
       debito,
       credito,
       valorObrigatorioTxt(l.valor, `valor da linha ${index + 1}`),
-      campoTxt(l.codHist, `código do histórico da linha ${index + 1}`),
+      campoEstruturalTxt(l.codHist, `código do histórico da linha ${index + 1}`),
       campoTxt(stripAccentsJs(l.complemento || ""), `complemento da linha ${index + 1}`),
-      campoTxt(l.iniciaLote, `início de lote da linha ${index + 1}`),
-      campoTxt(l.codigoEmp, `código da empresa da linha ${index + 1}`),
-      campoTxt(l.centroCustoDebito, `centro de custo débito da linha ${index + 1}`),
-      campoTxt(l.centroCustoCredito, `centro de custo crédito da linha ${index + 1}`),
+      campoEstruturalTxt(l.iniciaLote, `início de lote da linha ${index + 1}`),
+      campoEstruturalTxt(l.codigoEmp, `código da empresa da linha ${index + 1}`),
+      campoEstruturalTxt(l.centroCustoDebito, `centro de custo débito da linha ${index + 1}`),
+      campoEstruturalTxt(l.centroCustoCredito, `centro de custo crédito da linha ${index + 1}`),
     ].join(";");
   });
 }
@@ -442,7 +457,7 @@ function buildLanctosLines(linhas) {
 function buildBaixaLines(linhas, tipo, avisos) {
   return linhas.map((l, index) => {
     const base = [
-      campoTxt(l.numero, `número do título da linha ${index + 1}`, true),
+      campoEstruturalTxt(l.numero, `número do título da linha ${index + 1}`, true),
       documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`, false, avisos),
       dataTxt(l.vencimento, `vencimento da linha ${index + 1}`, false),
       dataTxt(l.databaixa, `data da baixa da linha ${index + 1}`),
@@ -471,15 +486,15 @@ function buildServicoPrestLines(linhas, avisos) {
     // cadastro e recusa o arquivo ("Município do cliente inválido"). Bari e Mantovani, que
     // importam esse mesmo layout há tempos, deixam os três em branco.
     campoTxt(stripAccentsJs(l.razaoSocial || ""), `razão social da linha ${index + 1}`),
-    campoTxt(l.uf, `UF da linha ${index + 1}`),
+    campoEstruturalTxt(l.uf, `UF da linha ${index + 1}`),
     campoTxt(stripAccentsJs(l.municipio || ""), `município da linha ${index + 1}`),
     campoTxt(stripAccentsJs(l.endereco || ""), `endereço da linha ${index + 1}`),
-    campoTxt(l.numeroDocumento, `número do documento da linha ${index + 1}`, true),
-    campoTxt(l.serie || "U", `série da linha ${index + 1}`, true),
+    campoEstruturalTxt(l.numeroDocumento, `número do documento da linha ${index + 1}`, true),
+    campoEstruturalTxt(l.serie || "U", `série da linha ${index + 1}`, true),
     dataTxt(l.data, `data da linha ${index + 1}`),
-    campoTxt(l.situacao ?? 0, `situação da linha ${index + 1}`, true),
-    campoTxt(l.acumulador, `acumulador da linha ${index + 1}`, true),
-    campoTxt(l.cfps, `CFPS da linha ${index + 1}`, true),
+    campoEstruturalTxt(l.situacao ?? 0, `situação da linha ${index + 1}`, true),
+    campoEstruturalTxt(l.acumulador, `acumulador da linha ${index + 1}`, true),
+    campoEstruturalTxt(l.cfps, `CFPS da linha ${index + 1}`, true),
     valorObrigatorioTxt(l.valorServicos, `valor dos serviços da linha ${index + 1}`),
     fmtValorTxt(l.valorDescontos || 0),
     fmtValorOpcionalTxt(l.valorDeducao),
@@ -494,7 +509,7 @@ function buildServicoPrestLines(linhas, avisos) {
     fmtValorOpcionalTxt(l.valorCsll),
     fmtValorOpcionalTxt(l.valorCrf),
     fmtValorOpcionalTxt(l.valorInss),
-    campoTxt(l.codigoItem, `código do item da linha ${index + 1}`),
+    campoEstruturalTxt(l.codigoItem, `código do item da linha ${index + 1}`),
     fmtValorOpcionalTxt(l.quantidade),
     fmtValorOpcionalTxt(l.valorUnitario),
   ].join(";"));
@@ -595,7 +610,15 @@ const IDS_RELATORIOS = new Set(RELATORIOS_FECHAMENTO.map((r) => r.id));
 // "08/2026" -> "2026-08", que ordena certo como id de documento
 function competenciaParaId(competencia) {
   const m = String(competencia || "").match(/^(\d{2})\/(\d{4})$/);
-  return m ? `${m[2]}-${m[1]}` : null;
+  if (!m) return null;
+  const mes = Number(m[1]);
+  const ano = Number(m[2]);
+  // \d{2}/\d{4} sozinho aceita "00" a "99" de mês — sem isso, "13/2026" virava "2026-13", que
+  // ordena como DEPOIS de "2026-12" na escolha da competência mais recente (comparação de
+  // string), fazendo o sistema tratar um mês inexistente como o fechamento em andamento.
+  if (mes < 1 || mes > 12) return null;
+  if (ano < 2000 || ano > 2100) return null;
+  return `${m[2]}-${m[1]}`;
 }
 
 // Cabeçalhos da grade de conferência — na mesma ordem das colunas que vão pro arquivo, pra
@@ -820,9 +843,12 @@ exports.assistenteChat = onCall(
       throw new HttpsError("unauthenticated", "É preciso estar logado.");
     }
 
-    const { empresaId, message, history, files } = request.data || {};
+    const { empresaId, message, history, files, requestId } = request.data || {};
     if (!empresaId || typeof empresaId !== "string") {
       throw new HttpsError("invalid-argument", "empresaId é obrigatório.");
+    }
+    if (requestId !== undefined && (typeof requestId !== "string" || requestId.length > 100)) {
+      throw new HttpsError("invalid-argument", "requestId inválido.");
     }
     if (message !== undefined && typeof message !== "string") {
       throw new HttpsError("invalid-argument", "A mensagem precisa ser texto.");
@@ -854,6 +880,38 @@ exports.assistenteChat = onCall(
     const responsavel = (empresa.responsavelEmail || "").toLowerCase();
     if (!isAdmin && responsavel && responsavel !== userEmail) {
       throw new HttpsError("permission-denied", "Você não tem acesso a esta empresa.");
+    }
+
+    // Trava de idempotência: se o navegador chamar de novo com o MESMO requestId (retry depois
+    // de um timeout aparente — o front dá timeout aos 280s, esta function só aos 300s, e nesse
+    // intervalo o processamento original continua rodando e grava normalmente), a segunda
+    // chamada não reprocessa do zero (o que geraria um segundo arquivo/lançamento pro mesmo
+    // pedido) — devolve a resposta já gravada, ou (se a primeira ainda estiver em andamento)
+    // avisa que já está sendo processada. .create() falha se o documento já existir, o que dá
+    // a mesma garantia atômica tanto pra "já terminou" quanto pra "duas chamadas ao mesmo
+    // tempo" — sem precisar de transação.
+    const empresaRef = db.collection("assistenteIA_empresas").doc(empresaId);
+    if (requestId) {
+      try {
+        await empresaRef.collection("processamentos").doc(requestId).create({
+          iniciadoEm: FieldValue.serverTimestamp(),
+        });
+      } catch (err) {
+        if (err && (err.code === 6 || err.code === "already-exists")) {
+          const jaRespondida = await empresaRef
+            .collection("mensagens")
+            .where("requestId", "==", requestId)
+            .limit(1)
+            .get();
+          if (!jaRespondida.empty) {
+            const dados = jaRespondida.docs[0].data();
+            log("requestId repetido — devolvendo resposta já gravada");
+            return { text: dados.text, usage: null, arquivosGerados: dados.arquivosGerados || [] };
+          }
+          throw new HttpsError("already-exists", "Essa mensagem já está sendo processada — aguarde a resposta chegar no chat antes de tentar de novo.");
+        }
+        throw err;
+      }
     }
 
     // Histórico de relatórios já processados — vira contexto permanente da IA, independente
@@ -1033,13 +1091,16 @@ exports.assistenteChat = onCall(
     // própria empresa tem código/CNPJ. O cadastro feito no app vem primeiro: não depende do
     // nome bater com o do banco compartilhado ("MV" x "M.V. A BENS LTDA - EPP").
     async function verificarCadastro(entidades) {
+      const validas = (Array.isArray(entidades) ? entidades : []).filter((e) => e && e.nome);
+      // Em paralelo: cada consulta é uma ida e volta ao projeto Firestore separado (Cibele) —
+      // sequencial somava a latência de todas (ex. 30 fornecedores = 30x o tempo de 1 consulta
+      // dentro da mesma rodada de ferramenta).
+      const achados = await Promise.all(
+        validas.map((e) => (e.cnpj ? lookupEntidade(e.cnpj).catch(() => null) : Promise.resolve(null)))
+      );
       const encontrados = [];
       const faltando = [];
-      for (const e of Array.isArray(entidades) ? entidades : []) {
-        if (!e || !e.nome) continue;
-        const achado = e.cnpj ? await lookupEntidade(e.cnpj).catch(() => null) : null;
-        (achado ? encontrados : faltando).push(String(e.nome));
-      }
+      validas.forEach((e, i) => (achados[i] ? encontrados : faltando).push(String(e.nome)));
       const cnpjEmpresa = normalizarDocumento(empresa.cnpj);
       let empresaEncontrada = (empresa.codigoDominio && cnpjEmpresa)
         ? { codigo: empresa.codigoDominio, cnpj: cnpjEmpresa }
@@ -1125,6 +1186,7 @@ exports.assistenteChat = onCall(
     const PRAZO_MS = 200 * 1000;
     const inicioConversa = Date.now();
     const textos = [];
+    let houveFerramenta = false;
     let response;
     for (let rodada = 1; rodada <= MAX_RODADAS; rodada++) {
       log(rodada === 1 ? "chamando a Anthropic API" : `chamando a Anthropic API (rodada ${rodada})`);
@@ -1139,6 +1201,7 @@ exports.assistenteChat = onCall(
         continue;
       }
       if (response.stop_reason !== "tool_use") break;
+      houveFerramenta = true;
 
       const usos = response.content.filter((b) => b.type === "tool_use");
       messages.push({ role: "assistant", content: response.content });
@@ -1155,7 +1218,13 @@ exports.assistenteChat = onCall(
         break;
       }
     }
-    let text = textos.join("\n\n");
+    // Se alguma rodada chamou ferramenta, texto de rodada anterior é sempre um "vou fazer
+    // isso agora" (nunca uma pergunta de verdade esperando resposta — isso sempre termina o
+    // turn sem chamar ferramenta), então concatenar dava mensagens tipo "Vou gerar o
+    // arquivo... [...] Pronto, gerei o arquivo" na mesma resposta. Só a última rodada importa
+    // nesse caso. Sem ferramenta nenhuma (conversa normal, ou só pause_turn por limite de
+    // tokens) continua juntando tudo, como sempre foi.
+    let text = houveFerramenta ? (textos[textos.length - 1] || "") : textos.join("\n\n");
 
     if (!text.trim()) {
       console.error("Resposta da IA veio sem texto. stop_reason:", response.stop_reason, "usage:", JSON.stringify(response.usage));
@@ -1284,6 +1353,7 @@ exports.assistenteChat = onCall(
         files: [],
         arquivosGerados: arquivosGerados,
         criadoEm: FieldValue.serverTimestamp(),
+        ...(requestId ? { requestId } : {}),
       });
 
     // Todo relatório enviado vira uma ficha permanente com o resumo E o arquivo original

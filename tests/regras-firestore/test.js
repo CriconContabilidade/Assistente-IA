@@ -89,6 +89,10 @@ async function caso(nome, esperado, promessa) {
   console.log('FUNCIONÁRIO — conversa, documentos, fechamento');
   await caso('lê mensagens da própria', 'ok', getDocs(query(collection(func, 'assistenteIA_empresas/minha/mensagens'), orderBy('text'))));
   await caso('envia mensagem na própria', 'ok', addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'user', text: 'oi' }));
+  await caso('envia mensagem com requestId (item 8 da auditoria)', 'ok',
+    addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'user', text: 'oi', requestId: 'abc-123' }));
+  await caso('NÃO envia requestId que não é string', 'falha',
+    addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'user', text: 'oi', requestId: 12345 }));
   await caso('grava mensagem de erro do assistente (como o app faz em timeout)', 'ok',
     addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'assistant', text: '⚠️ erro', files: [] }));
   await caso('NÃO forja arquivosGerados numa mensagem (achado da auditoria)', 'falha',
