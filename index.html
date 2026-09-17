@@ -790,6 +790,7 @@
       }
       isAdmin = temClaimAdmin || isAdminEmail(user.email);
       sincronizarClaimsSeNecessario();
+      migrarPadroesSeNecessario();
       userEmail.replaceChildren(document.createTextNode(user.email || ''));
       if (isAdmin) {
         const badge = document.createElement('span');
@@ -949,6 +950,23 @@
       console.log('Sincronização de custom claims admin:', r.data);
     } catch (err) {
       console.warn('Não deu pra sincronizar custom claims admin', err);
+    }
+  }
+
+  // Uma vez só (idempotente do lado do backend): migra os padrões de lançamento que a Fase 1
+  // tinha semeado como texto pra dado estruturado (item 2 da Fase 3) — consultar_padrao/
+  // salvar_padrao passam a usar isso em vez da IA interpretar frase solta nas observações.
+  const migrarPadroesEstruturados = httpsCallable(functionsClient, 'migrarPadroesEstruturados', { timeout: 100000 });
+  let migracaoJaDisparada = false;
+  async function migrarPadroesSeNecessario() {
+    if (!isAdmin || migracaoJaDisparada) return;
+    migracaoJaDisparada = true;
+    try {
+      const r = await migrarPadroesEstruturados();
+      console.log('Migração de padrões estruturados:', r.data);
+    } catch (err) {
+      console.warn('Não deu pra migrar padrões estruturados', err);
+      migracaoJaDisparada = false;
     }
   }
 

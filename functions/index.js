@@ -604,6 +604,50 @@ const FERRAMENTAS = [
       required: ["entidades"],
     },
   },
+  {
+    name: "consultar_padrao",
+    description: "Verifica se um lançamento do extrato/aplicação já tem um padrão salvo desta empresa (palavra-chave -> débito/crédito/histórico), ANTES de perguntar ao usuário como tratar. Chame uma vez por lançamento (ou por grupo de lançamentos claramente iguais) que não bateu com Contas a Pagar/Receber nem já estava no Diário. A resposta é determinística (não vem de texto pra você interpretar): 'encontrado' com os dados prontos pra usar, 'nenhum' se é a primeira vez que esse tipo aparece (aí sim pergunte ao usuário e use salvar_padrao depois), ou 'ambiguo' se mais de um padrão bateu (raro — pergunte ao usuário qual vale).",
+    input_schema: {
+      type: "object",
+      properties: {
+        descricao: { type: "string", description: "Histórico/descrição do lançamento exatamente como aparece no extrato" },
+        valor: { type: "number", description: "Valor do lançamento — alguns padrões só valem pra um valor específico (ex.: aluguel de sala x aluguel de salão, mesmo texto, valores diferentes)" },
+      },
+      required: ["descricao"],
+    },
+  },
+  {
+    name: "salvar_padrao",
+    description: "Grava um padrão de lançamento NOVO pra esta empresa, depois que o usuário confirmar débito/crédito/histórico pela primeira vez (siga a regra PADRÕES DE LANÇAMENTO MANUAL do prompt). A partir daí, consultar_padrao encontra esse lançamento sozinho, sem perguntar de novo. Se já existir um padrão com a mesma palavra-chave e tratamento diferente (sem uma condição de valor que diferencie os dois), a chamada falha com o conflito explicado — resolva com o usuário (normalmente adicionando 'condicaoValor' nos dois) antes de tentar salvar de novo.",
+    input_schema: {
+      type: "object",
+      properties: {
+        palavrasChave: {
+          type: "array",
+          description: "Uma ou mais palavras/trechos que identificam esse tipo de lançamento no extrato (comparação simples, sem diferenciar maiúsculas/acentos)",
+          items: { type: "string" },
+        },
+        condicaoValor: { type: "number", description: "Só preencha se esse padrão valer SÓ para um valor exato específico (quando o mesmo texto no extrato pode significar coisas diferentes por valor)" },
+        ignorar: { type: "boolean", description: "true = esse tipo de lançamento nunca é lançamento contábil, sempre pular (ex.: taxa de outro banco que não é desta empresa)" },
+        debito: { type: "string", description: "Código da conta débito (vazio/omita se ignorar=true)" },
+        credito: { type: "string", description: "Código da conta crédito" },
+        codigoHistorico: { type: "string", description: "Código do histórico do Domínio, se a empresa usar (geralmente vazio)" },
+        historico: { type: "string", description: "Texto do histórico, com as partes que variam a cada lançamento marcadas entre chaves, ex.: 'PAGAMENTO REF. ALUGUEL {mes}/{ano}'" },
+        periodo: { type: "string", enum: ["atual", "anterior"], description: "Se o {mes}/{ano} do histórico deve ser o do fechamento atual ou o mês anterior" },
+        provisao: {
+          type: "object",
+          description: "Só preencha se esse tipo de lançamento sempre exigir um SEGUNDO lançamento em conjunto (ex.: provisão). Omita se não houver.",
+          properties: {
+            debito: { type: "string" },
+            credito: { type: "string" },
+            historico: { type: "string" },
+            codigoHistorico: { type: "string" },
+          },
+        },
+      },
+      required: ["palavrasChave"],
+    },
+  },
 ];
 
 // Os relatórios que compõem um fechamento. A tela acende cada cartão conforme chegam, e é
@@ -772,15 +816,15 @@ PROCESSO DE CONCILIAÇÃO (extrato × Contas a Receber/Pagar × Diário) — sem
 4. IMPORTANTE — o Domínio não permite importar baixa de pagamento de Salário, Férias, 13º salário, nem de impostos e encargos trabalhistas. Sempre que aparecer um lançamento desse tipo no extrato, pergunte explicitamente se o usuário prefere fazer o lançamento manual por aqui, ou se prefere dar baixa direto no sistema Domínio (pra evitar diferença no fechamento dos saldos contábeis) — nunca tente gerar baixa automática pra esse tipo de lançamento nem assuma uma resposta.
 5. Sempre que houver distribuição de lucros no extrato, pergunte se é um adiantamento ou uma distribuição de fato — nunca assuma. Se for distribuição de fato, pergunte também se o usuário já deseja fazer a provisão desse pagamento.
 
-PADRÕES DE LANÇAMENTO MANUAL — perguntar uma única vez por tipo, guardar pra sempre: quando um lançamento do extrato/aplicação cair no caminho (a) lançamento manual (passo 3 acima, ou durante a configuração inicial), antes de perguntar qualquer coisa ao usuário, procure nas "Observações e padrões já ensinados" desta empresa (seção do início do prompt) um padrão cujo histórico/descrição do extrato combine com esse lançamento. Se achar um padrão salvo:
-- Aplique direto (débito, crédito, código do histórico) sem perguntar de novo.
-- O texto do histórico de um padrão salvo pode ter trechos variáveis marcados entre chaves, ex: "Pagamento aluguel ref. {mes/ano}" ou "NF {numero} - {fornecedor}" — ao aplicar, substitua cada trecho entre chaves pelo valor real desse lançamento específico (nunca deixe chaves literais no arquivo final).
-- Se o padrão indicar que esse tipo de lançamento também exige provisão ou um segundo lançamento em conjunto, gere os dois automaticamente, sem perguntar de novo.
-Se NÃO achar um padrão salvo pra esse tipo de lançamento (é a primeira vez que aparece), é preciso definir um novo:
-- Se o Plano de Contas desta empresa já foi enviado (está no histórico de relatórios processados), sugira a conta débito e a conta crédito mais prováveis olhando a descrição do lançamento contra as contas cadastradas — apresente a sugestão ao usuário, não assuma como definitivo.
-- Pergunte ao usuário, numa única mensagem sobre esse tipo de lançamento (não uma pergunta por campo): (1) confirmação das contas débito/crédito (ou a correção, se sua sugestão estiver errada); (2) o texto do histórico a usar, marcando com chaves '{}' as partes que variam a cada lançamento (ex.: mês, número de documento, nome); (3) o código do histórico, se a empresa usar um (geralmente fica vazio); (4) se esse tipo de lançamento também precisa de uma provisão ou de um segundo lançamento em conjunto — se sim, quais contas e histórico usar nesse segundo lançamento também.
-- Depois de confirmado, resuma o padrão aprendido em 1-2 frases e pergunte se pode salvar como observação permanente da empresa (nunca salve sozinho, sem essa confirmação) — a partir daí, todo lançamento com aquele mesmo tipo de descrição é reconhecido e aplicado automaticamente, sem perguntar de novo pra essa empresa.
-Isso vale tanto durante a configuração inicial de uma empresa nova (ver MODO DE CONFIGURAÇÃO INICIAL abaixo) quanto no processamento normal de qualquer mês depois.
+PADRÕES DE LANÇAMENTO MANUAL — perguntar uma única vez por tipo, guardar pra sempre: quando um lançamento do extrato/aplicação cair no caminho (a) lançamento manual (passo 3 acima, ou durante a configuração inicial), antes de perguntar qualquer coisa ao usuário, chame a ferramenta consultar_padrao com o histórico/descrição do lançamento (e o valor, se o mesmo texto puder significar coisas diferentes por valor). A resposta é sempre exata — nunca invente nem tente lembrar um padrão de cabeça, sempre chame a ferramenta.
+- "Padrão encontrado": aplique direto (débito, crédito, código do histórico) sem perguntar de novo. O histórico pode ter trechos entre chaves — substitua cada um pelo valor real desse lançamento específico (nunca deixe chaves literais no arquivo final). Se vier "TAMBÉM gere um segundo lançamento de provisão", gere os dois.
+- "Nenhum padrão": é a primeira vez que esse tipo aparece.
+  - Se o Plano de Contas desta empresa já foi enviado (está no histórico de relatórios processados), sugira a conta débito e a conta crédito mais prováveis olhando a descrição do lançamento contra as contas cadastradas — apresente a sugestão ao usuário, não assuma como definitivo.
+  - Pergunte ao usuário, numa única mensagem sobre esse tipo de lançamento (não uma pergunta por campo): (1) confirmação das contas débito/crédito (ou a correção); (2) o texto do histórico, marcando com chaves as partes que variam a cada lançamento (ex.: mês, número de documento, nome); (3) o código do histórico, se a empresa usar um (geralmente fica vazio); (4) se precisa de uma provisão ou de um segundo lançamento em conjunto — se sim, quais contas e histórico usar nesse segundo lançamento também.
+  - Depois de confirmado, resuma o padrão aprendido em 1-2 frases e pergunte se pode salvar (nunca salve sozinho, sem essa confirmação); confirmado, chame salvar_padrao com os dados. Se a ferramenta recusar por já existir um padrão conflitante pra mesma palavra-chave, explique o conflito ao usuário — normalmente é porque o mesmo texto do extrato significa coisas diferentes dependendo do valor (peça pra ele confirmar os valores de cada caso e chame de novo com "condicaoValor" nos dois).
+- "Padrão incompleto": essa palavra-chave já apareceu antes, mas falta confirmar os detalhes de novo (geralmente porque variava por nome/período) — trate como "nenhum padrão" (pergunte e salve), a nova chamada de salvar_padrao completa o mesmo padrão em vez de criar um duplicado.
+- "Mais de um padrão bateu": raro — geralmente falta "condicaoValor" diferenciando dois padrões parecidos. Pergunte ao usuário qual vale pra esse valor específico.
+Isso vale tanto durante a configuração inicial de uma empresa nova (ver MODO DE CONFIGURAÇÃO INICIAL abaixo) quanto no processamento normal de qualquer mês depois. Os padrões já ficam salvos por empresa — a lista de "observações" no topo do prompt é só pra regras gerais (regime tributário, se é escritório de advocacia etc.), não guarda mais padrão de lançamento.
 
 APLICAÇÃO FINANCEIRA (empresas do Lucro Presumido — confirme nas observações da empresa se ela é desse regime antes de aplicar isso): ao processar o extrato de aplicação financeira, gere a Nota Fiscal de serviço com o valor do rendimento tributado e o IRRF correspondente. Na baixa, use o valor realmente recebido no banco — jogue a diferença entre o valor recebido e o "valor a receber" pra conta de juros.
 ATENÇÃO — isso define QUAIS ARQUIVOS gerar, e depende do REGIME da empresa:
@@ -1127,6 +1171,105 @@ exports.assistenteChat = onCall(
       return { encontrados, faltando, empresaEncontrada };
     }
 
+    // ---------------- padrões de lançamento estruturados (item 2 da Fase 3) ----------------
+    // Antes eram frase de texto solta nas observações da empresa — a IA lia e interpretava se
+    // batia. Isso já causou padrão contraditório sem ninguém perceber (duas frases pra mesma
+    // chave, uma "ignorar" outra não) porque texto livre não dá pro código comparar. Agora é
+    // dado estruturado numa subcoleção própria: o CASAMENTO é determinístico (código, não
+    // interpretação), e salvarPadrao() recusa um padrão novo que contradiga um já salvo pra
+    // mesma chave sem condição de valor diferenciando — o problema não acontece de novo.
+    const padroesRef = db.collection("assistenteIA_empresas").doc(empresaId).collection("padroes");
+    let padroesCache = null;
+    async function carregarPadroes() {
+      if (!padroesCache) {
+        const snap = await padroesRef.get();
+        padroesCache = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      }
+      return padroesCache;
+    }
+    function bateChave(padrao, descricaoNorm) {
+      return (padrao.palavrasChave || []).some((chave) => {
+        const chaveNorm = stripAccentsJs(String(chave)).toUpperCase();
+        if (padrao.ehRegex) {
+          try { return new RegExp(chave, "i").test(descricaoNorm); } catch { return false; }
+        }
+        return chaveNorm && descricaoNorm.includes(chaveNorm);
+      });
+    }
+    async function consultarPadrao(descricao, valor) {
+      const descricaoNorm = stripAccentsJs(String(descricao || "")).toUpperCase();
+      const padroes = await carregarPadroes();
+      const bateram = padroes.filter((p) => bateChave(p, descricaoNorm));
+      if (bateram.length === 0) return { status: "nenhum" };
+      const comValorCerto = bateram.filter((p) => p.condicaoValor != null && valor != null && Math.abs(p.condicaoValor - valor) < 0.01);
+      const semCondicao = bateram.filter((p) => p.condicaoValor == null);
+      const candidatos = comValorCerto.length > 0 ? comValorCerto : semCondicao;
+      if (candidatos.length === 0) return { status: "nenhum" };
+      if (candidatos.length > 1) return { status: "ambiguo", opcoes: candidatos };
+      return { status: "encontrado", padrao: candidatos[0] };
+    }
+    function formatarPadrao(p) {
+      if (p.ignorar) return "IGNORAR — não é lançamento contábil, pule";
+      const partes = [`Débito ${p.debito || "(nenhum)"} / Crédito ${p.credito || "(nenhum)"}`];
+      if (p.codigoHistorico) partes.push(`código do histórico ${p.codigoHistorico}`);
+      if (p.historico) partes.push(`histórico "${p.historico}" (substitua o que estiver entre chaves pelo valor real deste lançamento)`);
+      if (p.periodo) partes.push(`período: ${p.periodo === "anterior" ? "mês anterior" : "mês atual"}`);
+      if (p.provisao) {
+        partes.push(`TAMBÉM gere um segundo lançamento de provisão: Débito ${p.provisao.debito || "(nenhum)"} / Crédito ${p.provisao.credito || "(nenhum)"}${p.provisao.historico ? `, histórico "${p.provisao.historico}"` : ""}`);
+      }
+      return partes.join(", ");
+    }
+    async function salvarPadrao(spec) {
+      const palavrasChave = (Array.isArray(spec.palavrasChave) ? spec.palavrasChave : []).map(String).filter((s) => s.trim());
+      if (palavrasChave.length === 0) throw new Error("informe ao menos uma palavra-chave");
+      if (!spec.ignorar && !spec.debito && !spec.credito) {
+        throw new Error("informe débito e/ou crédito, ou marque ignorar=true");
+      }
+      const existentes = await carregarPadroes();
+      let completarId = null;
+      if (spec.condicaoValor == null) {
+        for (const existente of existentes) {
+          if (existente.condicaoValor != null) continue;
+          const chaveConflito = (existente.palavrasChave || []).find((c) => palavrasChave.includes(c));
+          if (!chaveConflito) continue;
+          // Padrão migrado incompleto (histórico dinâmico da ferramenta antiga, nunca
+          // confirmado) — completar com os dados de agora é o objetivo, não um conflito.
+          if (existente.pendenteRevisao) { completarId = existente.id; continue; }
+          const mesmoTratamento = (existente.debito || null) === (spec.debito || null)
+            && (existente.credito || null) === (spec.credito || null)
+            && !!existente.ignorar === !!spec.ignorar;
+          if (!mesmoTratamento) {
+            throw new Error(`já existe um padrão pra "${chaveConflito}" com tratamento diferente (${formatarPadrao(existente)}) — se são casos diferentes (ex.: mesmo texto, valores diferentes), adicione "condicaoValor" nos dois; se é a mesma regra, não precisa salvar de novo`);
+          }
+        }
+      }
+      const doc = {
+        palavrasChave,
+        ehRegex: false,
+        condicaoValor: spec.condicaoValor != null ? Number(spec.condicaoValor) : null,
+        ignorar: !!spec.ignorar,
+        debito: spec.debito || null,
+        credito: spec.credito || null,
+        codigoHistorico: spec.codigoHistorico || null,
+        historico: spec.historico || null,
+        periodo: spec.periodo || null,
+        provisao: spec.provisao && (spec.provisao.debito || spec.provisao.credito)
+          ? {
+              debito: spec.provisao.debito || null,
+              credito: spec.provisao.credito || null,
+              historico: spec.provisao.historico || null,
+              codigoHistorico: spec.provisao.codigoHistorico || null,
+            }
+          : null,
+        pendenteRevisao: false,
+        criadoEm: FieldValue.serverTimestamp(),
+      };
+      if (completarId) await padroesRef.doc(completarId).set(doc, { merge: true });
+      else await padroesRef.add(doc);
+      padroesCache = null; // próxima consulta releva, já com o padrão novo
+      return doc;
+    }
+
     function gerarArquivo(spec) {
       const arquivo = buildArquivoGerado(spec);
       if (!arquivo) throw new Error("tipo de arquivo desconhecido ou sem linhas");
@@ -1176,6 +1319,27 @@ exports.assistenteChat = onCall(
             ? `Empresa ${empresa.nome}: código ${r.empresaEncontrada.codigo}, CNPJ ${r.empresaEncontrada.cnpj}.`
             : `A empresa "${empresa.nome}" não tem código e CNPJ do Domínio cadastrados — peça esses dois dados ao usuário.`);
           return { content: partes.join(" ") };
+        }
+        if (nome === "consultar_padrao") {
+          const r = await consultarPadrao(entrada && entrada.descricao, entrada && entrada.valor);
+          if (r.status === "nenhum") {
+            return { content: "Nenhum padrão salvo bate com esse lançamento — é a primeira vez que esse tipo aparece. Siga a regra PADRÕES DE LANÇAMENTO MANUAL: sugira conta pelo Plano de Contas se disponível, pergunte ao usuário, e chame salvar_padrao depois de confirmado." };
+          }
+          if (r.status === "ambiguo") {
+            return {
+              content: `Mais de um padrão bateu com esse lançamento — pergunte ao usuário qual vale (raro, normalmente falta um "condicaoValor" diferenciando): ${r.opcoes.map((p) => formatarPadrao(p)).join(" | ")}`,
+            };
+          }
+          if (r.padrao.pendenteRevisao) {
+            return {
+              content: `Essa palavra-chave já apareceu antes nesta empresa, mas o padrão está incompleto (débito/crédito ou histórico ainda não confirmados — precisa de dado que varia por nome/período). Confirme com o usuário como tratar dessa vez e chame salvar_padrao com os dados completos.`,
+            };
+          }
+          return { content: `Padrão encontrado: ${formatarPadrao(r.padrao)}` };
+        }
+        if (nome === "salvar_padrao") {
+          const doc = await salvarPadrao(entrada || {});
+          return { content: `Padrão salvo: ${formatarPadrao(doc)} — a partir de agora consultar_padrao encontra esse tipo de lançamento sozinho.` };
         }
         return { content: `Ferramenta desconhecida: ${nome}`, is_error: true };
       } catch (err) {
@@ -1605,5 +1769,3103 @@ exports.sincronizarClaimsAdmin = onCall(
       resultado,
       aviso: "Quem recebeu o claim agora precisa fazer logout e login de novo (ou dar um F5 depois de uns segundos) pra ele aparecer no token — custom claim só entra no token na próxima vez que ele é emitido.",
     };
+  }
+);
+
+// ---------------- migração dos padrões estruturados (item 2 da Fase 3) ----------------
+// Os mesmos 189 padrões que a Fase 1 tinha semeado como TEXTO em "notas" (PADROES_SEED_
+// DETALHADO), extraídos de novo direto das ferramentas originais — agora como dado
+// estruturado pras novas ferramentas consultar_padrao/salvar_padrao usarem. A duplicata
+// contraditória do Holding (mesma chave, "ignorar" e "não ignorar" ao mesmo tempo) já foi
+// removida aqui na extração, e nunca mais pode acontecer de novo: salvarPadrao() recusa
+// tratamento diferente pra mesma chave sem condição de valor.
+
+const PADROES_ESTRUTURADOS = {
+  "Sindisaúde": [
+    {
+      "palavrasChave": [
+        "LIQ.COBRANCA SIMPLES"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "62",
+      "codigoHistorico": null,
+      "historico": "RECEBIMENTO REF. TAXA NEGOCIAL",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RECEB. COB HIBRIDA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "62",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "taxaNegocialComNome",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "37717685949",
+        "48272124904",
+        "06793619950",
+        "09208529983",
+        "00750073000109"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "62",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "taxaNegocialComNome",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "07447710000103"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "264",
+      "codigoHistorico": null,
+      "historico": "RECEBIMENTO DE VALORES A REPASSAR DA MANTENEDORA TIMBÉ DO SUL PARA FUNCIONÁRIOS",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RECEBIMENTO PIX 02724492000193"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "100",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "estornoSulOnline",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "LIQUIDACAO BOLETO 02724492000193"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "100",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "internetSulOnline",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RECEBIMENTO PIX"
+      ],
+      "ehRegex": false,
+      "condicaoValor": 200,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "58",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "aluguelSalaoFestas",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RECEBIMENTO PIX 03907818000180"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "58",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "aluguelSalaoFestas",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RECEBIMENTO PIX"
+      ],
+      "ehRegex": false,
+      "condicaoValor": 60,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "64",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "aluguelQuiostaCampestre",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "SAQUE DIN AG"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "148",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "compensacaoCheque",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "TARIFA SERV.COBR.TITULOS"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "49",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. TARIFA DE EMISSÃO DE BOLETOS",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "TARIFA LIQUIDACAO PIXCOB"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "49",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. TARIFA DE RECEBIMENTO DE PIX POR BOLETO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CUSTAS DE PROTESTO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "103",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. CUSTAS DE PROTESTO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "TARIFA DE PROTESTO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "103",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. TARIFA DE PROTESTO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PASSAGEM PEDAGIO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "102",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "pedagio",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "00658236997"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "104",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "faxineiraLimpezaSede",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "76935213991"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "169",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "assessoriaImprensa",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "02654498980"
+      ],
+      "ehRegex": false,
+      "condicaoValor": 743,
+      "ignorar": false,
+      "debito": "237",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "equiparacaoSalarialPisoEnfermagem",
+      "contextoExtra": "CLEBER RICARDO DA SILVA CANDIDO"
+    },
+    {
+      "palavrasChave": [
+        "76342000930"
+      ],
+      "ehRegex": false,
+      "condicaoValor": 743,
+      "ignorar": false,
+      "debito": "237",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "equiparacaoSalarialPisoEnfermagem",
+      "contextoExtra": "REGINALDO KJHELIN COELHO"
+    },
+    {
+      "palavrasChave": [
+        "02654498980"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "237",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "verbaRepresentacaoSindicalVariavel",
+      "contextoExtra": "CLEBER RICARDO DA SILVA CANDIDO"
+    },
+    {
+      "palavrasChave": [
+        "12646621906"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "237",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "pensaoAlimenticia",
+      "contextoExtra": "funcionário: CLEBER RICARDO DA SILVA CANDIDO; recebedor: LEONARDO HELEODORO CANDIDO"
+    },
+    {
+      "palavrasChave": [
+        "09074057977"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "237",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "pensaoAlimenticia",
+      "contextoExtra": "funcionário: GABRIELA CAMPOS PNKOSKI; recebedor: KAUA PNKOSKI"
+    },
+    {
+      "palavrasChave": [
+        "02263388940"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "237",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "pensaoAlimenticia",
+      "contextoExtra": "funcionário: REGINALDO KJHELIN COELHO; recebedor: ICARO"
+    },
+    {
+      "palavrasChave": [
+        "64743675000103"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "288",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "honorariosAdvocaticiosAntecipado",
+      "contextoExtra": "CHALTON SCHNEIDER ADVOCACIA"
+    },
+    {
+      "palavrasChave": [
+        "02131384920"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "237",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "verbaRepresentacaoSindical",
+      "contextoExtra": "GABRIELA CAMPOS PNKOSKI"
+    },
+    {
+      "palavrasChave": [
+        "57065825000101"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "41762579000107"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "244",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. VALE TRANSPORTE DOS FUNCIONÁRIOS",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "37919090000129"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "99",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "telefoneMesAnterior",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "08336783000190"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "267",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "energiaCelescSedes",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "60563731000177"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "66",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. MENSALIDADE DA CUT",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "08561701000101"
+      ],
+      "ehRegex": false,
+      "condicaoValor": 27500,
+      "ignorar": false,
+      "debito": "153",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "garrafasPersonalizadas",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "83646653000170"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "267",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "energiaCooperaliancaRecreativa",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "75565499000183"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "66",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "convenioSindHospitais",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "05411125979",
+        "91223270963",
+        "07613542980",
+        "02332119930",
+        "07293411944"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "269",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "gratificacaoAgenteSindicalizacao",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "01004788000177"
+      ],
+      "ehRegex": false,
+      "condicaoValor": 500,
+      "ignorar": false,
+      "debito": "172",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. LOCAÇÃO DE COPIADORA SEDE E SUBSEDE",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "67139485000170"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "66",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. ANUIDADE CNTS 2026",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "02317956967"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "237",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "verbaReuniaoConselheiroFiscal",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "07991146000195"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "266",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. DESPESAS COM CONVÊNIO OBSERVATÓRIO SAÚDE DO TRABALHADOR",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "07469809000106"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "100",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "internetBandaturbo",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "52154298000198"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "117",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. SISTEMA DE WHATSAPP - MAURO ATILA DE CARVALHO MIRANDA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "20377147000102"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "77",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "musicaFestaPosse",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "33258398000110"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "41",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "buffetFestaPosse",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "81329047000103"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "86",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "mensalidadeSindes",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "26603609000149"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "100",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "provedorNetworkOrdem",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "82508433000117"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "78",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "aguaCasanSedes",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "02558157000162"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "100",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "internetVivoSedes",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "82568221000125"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "78",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "aguaSubsedeSamae",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "APLICACAO FINANCEIRA CAPTACAO",
+        "APLIC.FINANC.AVISO PREVIO CAPTACAO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "108",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "VALOR REF. APLICAÇÃO FINANCEIRA - SICREDINVEST EVOLUTIVO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RESG.APLIC.FIN.AVISO PREV CAPTACAO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "108",
+      "codigoHistorico": null,
+      "historico": "VALOR REF. RESGATE DE APLICAÇÃO FINANCEIRA - SICREDINVEST EVOLUTIVO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CHEQUE COMPE SICREDI"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "148",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "compensacaoCheque",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "76342000930"
+      ],
+      "ehRegex": false,
+      "condicaoValor": 49.3,
+      "ignorar": false,
+      "debito": "103",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. CUSTAS E EMOLUMENTOS CARTORÁRIOS",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "35562597000142"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "61",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. SEGURO BOXER MGL7939",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "97526100059"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "266",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "convenioOdontologico",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PAGAMENTO PIX 02724492000193"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "100",
+      "credito": "10",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "internetSulOnlinePix",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "83871178000135"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "262",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "recebimentoRepasseAcc",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "28700530000242"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "264",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "recebimentoRepasseAcc",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "92736040000890"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "268",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "recebimentoRepasseAcc",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "28700530000838"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "62",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "taxaNegocialComNome",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "28700530002881"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "62",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "taxaNegocialComNome",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "05886070966"
+      ],
+      "ehRegex": false,
+      "condicaoValor": 500,
+      "ignorar": false,
+      "debito": "10",
+      "credito": "62",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "taxaNegocialComNome",
+      "contextoExtra": null
+    }
+  ],
+  "Bari": [
+    {
+      "palavrasChave": [
+        "TARIFA COBRANÇA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "384",
+      "credito": "20",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. TARIFA BANCARIA POR EMISSÃO DE BOLETO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "DÉB.SEGURO EMPRÉSTIMO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "355",
+      "credito": "20",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. SEGURO DE EMPRÉSTIMO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "DÉB.IOF"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "385",
+      "credito": "20",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. IOF",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "JUROS CONTA GARANTIDA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "384",
+      "credito": "20",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. JUROS DE CONTA GARANTIDA SICOOB",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "DÉB.SEGURO PRESTAMISTA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "355",
+      "credito": "20",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. SEGURO PRESTAMISTA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "DÉBITO PACOTE SERVIÇOS"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "384",
+      "credito": "20",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. PACOTE DE SERVIÇOS BANCÁRIOS SICOOB",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "VIS DÉB.CONV.DEMAIS EMPRESAS",
+        "DÉB.CONV.DEMAIS EMPRESAS"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "627",
+      "credito": "20",
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "faturaCartao",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CRÉD.LIQUIDAÇÃO COBRANÇA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "DÉB.CONV.TRIBUTOS FEDERAIS"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "DÉB.TIT.COMPE EFETIVADO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "FERRARA COMERCIO E IMPORTACAO",
+        "08.957.929"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "REM.: CRISTIANO PACHECO BUSSOLO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": "411",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. LUCROS DISTRIBUIDOS AO SÓCIO CRISTIANO PACHECO BUSSOLO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PIX RECEBIDO - OUTRA IF"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "IG": [
+    {
+      "palavrasChave": [
+        "CELESC"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "334",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. ENERGIA ELÉTRICA {MM}/{AAAA} - CELESC",
+      "periodo": "anterior",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "ADRIANA DE SOUZA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "839",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. SERVIÇO DE LIMPEZA {MM}/{AAAA} - ADRIANA DE SOUZA",
+      "periodo": "atual",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PJ CONTA PJ"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "384",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. PACOTE DE SERVIÇOS BANCÁRIOS {MM}/{AAAA} - UNICRED",
+      "periodo": "atual",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "82916818000113"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "878",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. IPTU - MUNICIPIO DE CRICIUMA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "82996703000186"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "18191228000171"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "ESTER OLIVIA CERON"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "ARLINDO ROCHA ADVOGADOS"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RESGATE APLICACAO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RECEBIMENTO DE TED",
+        "LOCATIVA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "TRANSFERENCIA ENTRE CONTAS"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "262",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "VALOR REF. DISTRIBUIÇÃO DE LUCROS {MM}/{AAAA} - BARBARA GUIMARÃES",
+      "periodo": "atual",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PATRICIA GUIMARAES MORMELLO",
+        "DEB PIX"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "262",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "VALOR REF. DISTRIBUIÇÃO DE LUCROS {MM}/{AAAA} - PATRICIA GUIMARÃES",
+      "periodo": "atual",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "Vidal Adv": [
+    {
+      "palavrasChave": [
+        "CONTATO INTERNET"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "454",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. INTERNET {MM}/{YYYY} - CONTATO (PERIODO MES ANTERIOR)",
+      "periodo": "anterior",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CELESC"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "344",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. FATURA DE ENERGIA ELETRICA {MM}/{YYYY} - CELESC (PERIODO MES ANTERIOR)",
+      "periodo": "anterior",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PJBANK"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "351",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. CONDOMINIO - SALA TERMINAL CENTRAL",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "Equilíbrio": [
+    {
+      "palavrasChave": [
+        "ALUGUEL DE MAQUINA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "417",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PGTO REF. ALUGUEL MAQUINA DE CARTÃO {MM}/{AAAA}",
+      "periodo": "anterior",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "MULTI AGUAS DISTRIBUIDORA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "360",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PGTO REF. COMPRA DE AGUA MINERAL - MULTI ÁGUAS",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "AGUA",
+        "LOGO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "360",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PGTO REF. COMPRA DE AGUA MINERAL COM LOGO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "IOF"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "385",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PGTO REF. IOF",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "LIQUIDACAO DE PARCELA DE EMPRESTIMO",
+        "2024002259"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "540",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. EMPRÉSTIMO UNICRED Nº 2024002259 PARC.{PARC}/{TOTALPARC}",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "INT TELEF TV"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "363",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. FATURA DA VIVO DE INTERNET E TV {MM}/{AAAA}",
+      "periodo": "atual",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CARTAO VISA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "462",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. FATURA DO CARTÃO DE CRÉDITO {MM}/{AAAA}",
+      "periodo": "anterior",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CASAN"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "346",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. FATURA DE ÁGUA CASAN {MM}/{AAAA}",
+      "periodo": "atual",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "ALUGUEL"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "345",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. ALUGUEL LOCATIVA {MM}/{AAAA}",
+      "periodo": "anterior",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "OXIGENIO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "407",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. ALUGUEL DE CILINDROS E TANQUE DE OXIGÊNIO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CONTABILIDADE"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "222",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PGTO REF. HONORÁRIOS CONTÁBEIS {MM}/{AAAA} - CRICON CONTABILIDADE",
+      "periodo": "anterior",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PORTO SEGUROS"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "150",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. SEGURO DA CLINICA - PORTO SEGUROS",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CELESC"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "344",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. FATURA DE ENERGIA ELÉTRICA {MM}/{AAAA} - CELESC",
+      "periodo": "atual",
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "ALIMENTA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "352",
+      "credito": "8",
+      "codigoHistorico": null,
+      "historico": "PGTO REF. VALE ALIMENTAÇÃO - CARTÃO PLUXEE",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "Agenor": [
+    {
+      "palavrasChave": [
+        "PJBANK"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "222",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "honorariosPagto",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RECEITA FEDERAL"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PLANO INT CAPITAL"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "76",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": "capitalMesAtual",
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "APLIC. FINANC. FUNDOS",
+        "APLIC FINANC FUNDOS",
+        "APLICACAO FINANC FUNDOS"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "9",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "VALOR REF. APLICAÇÃO FINANCEIRA SICREDI",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "83845701000159"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "340",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. CUSTAS PROCESSUAIS - TJSC",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "AGENOR DAUFENBACH"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "241",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. ADIANTAMENTO DE LUCROS - AGENOR DAUFENBACH JUNIOR",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "DANIELA DE OLIVEIRA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "231",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. ADIANTAMENTO DE LUCROS - DANIELA DE OLIVEIRA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "GABRIELA ROVARIS"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "251",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. ADIANTAMENTO DE LUCROS - GABRIELA ROVARIS",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "MAIARA MAFIOLETTI"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "504",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. ADIANTAMENTO DE LUCROS - MAIARA MAFIOLETTI MACARINI",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "Cia da Língua": [
+    {
+      "palavrasChave": [
+        "LOCATIVA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. ALUGUEL DO MÊS {MM}/{YYYY} - LOCATIVA",
+      "periodo": "anterior",
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CONDOMINIO",
+        "CONTASUL",
+        "JAIME SCREMIN"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. CONDOMINIO ED. JAIME SCREMIN {MM}/{YYYY}",
+      "periodo": "anterior",
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CLARO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. FATURA DE TELEFONE {MM}/{YYYY} - CLARO",
+      "periodo": "atual",
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CELESC"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. FATURA DE ENERGIA ELETRICA SALA 403 {MM}/{YYYY} - CELESC",
+      "periodo": "anterior",
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "UNIMED"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. PLANO DE SAUDE {MM}/{YYYY} - UNIMED",
+      "periodo": "anterior",
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CRICON"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. HONORARIOS CONTABEIS {MM}/{YYYY} - CRICON CONTABILIDADE",
+      "periodo": "atual",
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "FGTS"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "IRRF"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "SIMPLES NACIONAL"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "Holding AFA": [
+    {
+      "palavrasChave": [
+        "PJBANK",
+        "JACHELINE DAMASIO",
+        "CRICON"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "434",
+      "credito": "7",
+      "codigoHistorico": "7",
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "APLICACAO FINANCEIRA",
+        "APLICAÇÃO FINANCEIRA",
+        "APLIC FINANC"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "20",
+      "credito": "7",
+      "codigoHistorico": "80",
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "GT CLINICA",
+        "GT CLÍNICA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "7",
+      "credito": "13",
+      "codigoHistorico": "1",
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RESGATE APLICACAO FINANCEIRA",
+        "RESGATE APLICAÇÃO FINANCEIRA",
+        "RESG APLIC FINANC"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PIX ENVIADO PARA FERNANDA FREITAS SIMON ALTHOFF"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PIX ENVIADO PARA ANDRE ANTONIO ALTHOFF"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "Holding EBR": [
+    {
+      "palavrasChave": [
+        "PJBANK",
+        "JACHELINE DAMASIO",
+        "CRICON"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "434",
+      "credito": "7",
+      "codigoHistorico": "7",
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "APLICACAO FINANCEIRA",
+        "APLICAÇÃO FINANCEIRA",
+        "APLIC FINANC"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "20",
+      "credito": "7",
+      "codigoHistorico": "80",
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "GT CLINICA",
+        "GT CLÍNICA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "7",
+      "credito": "13",
+      "codigoHistorico": "1",
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RESGATE APLICACAO FINANCEIRA",
+        "RESGATE APLICAÇÃO FINANCEIRA",
+        "RESG APLIC FINANC"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PIX ENVIADO PARA FERNANDA FREITAS SIMON ALTHOFF"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PIX ENVIADO PARA ANDRE ANTONIO ALTHOFF"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "Holding GBG": [
+    {
+      "palavrasChave": [
+        "PJBANK",
+        "JACHELINE DAMASIO",
+        "CRICON"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "434",
+      "credito": "7",
+      "codigoHistorico": "7",
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "APLICACAO FINANCEIRA",
+        "APLICAÇÃO FINANCEIRA",
+        "APLIC FINANC"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "20",
+      "credito": "7",
+      "codigoHistorico": "80",
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "GT CLINICA",
+        "GT CLÍNICA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "7",
+      "credito": "13",
+      "codigoHistorico": "1",
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RESGATE APLICACAO FINANCEIRA",
+        "RESGATE APLICAÇÃO FINANCEIRA",
+        "RESG APLIC FINANC"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PIX ENVIADO PARA FERNANDA FREITAS SIMON ALTHOFF"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PIX ENVIADO PARA ANDRE ANTONIO ALTHOFF"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "Holding LTA": [
+    {
+      "palavrasChave": [
+        "PJBANK",
+        "JACHELINE DAMASIO",
+        "CRICON"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "434",
+      "credito": "7",
+      "codigoHistorico": "7",
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "APLICACAO FINANCEIRA",
+        "APLICAÇÃO FINANCEIRA",
+        "APLIC FINANC"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "20",
+      "credito": "7",
+      "codigoHistorico": "80",
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "GT CLINICA",
+        "GT CLÍNICA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "7",
+      "credito": "13",
+      "codigoHistorico": "1",
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RESGATE APLICACAO FINANCEIRA",
+        "RESGATE APLICAÇÃO FINANCEIRA",
+        "RESG APLIC FINANC"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": true,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PIX ENVIADO PARA FERNANDA FREITAS SIMON ALTHOFF"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PIX ENVIADO PARA ANDRE ANTONIO ALTHOFF"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": null,
+      "periodo": null,
+      "pendenteRevisao": true,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "Casa do Pai": [
+    {
+      "palavrasChave": [
+        "DIZIMO",
+        "OFERTA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": "54",
+      "codigoHistorico": null,
+      "historico": "RECEBIMENTO REF. DIZIMOS E OFERTAS",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "ALIVE EUA",
+        "ALIVE CHURCH"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": "152",
+      "codigoHistorico": null,
+      "historico": "RECEBIMENTO REF. DOACAO ALIVE CHURCH EUA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "DOACAO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": "152",
+      "codigoHistorico": null,
+      "historico": "RECEBIMENTO REF. DOACOES",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "AGUA (DISTRIBUIDORA)",
+        "AGUA DISTRIBUIDORA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "78",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. AGUA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "ENERGIA ELETRICA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "120",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. ENERGIA ELETRICA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "INTERNET"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "100",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. INTERNET",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "ALUGUEL"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "71",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. ALUGUEL",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "ALVARA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "68",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. ALVARA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "DESPESAS BANCARIAS"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "49",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. DESPESAS BANCARIAS",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CARTAO DE CREDITO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "145",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. FATURA DO CARTAO DE CREDITO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CONTABILIDADE"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "85",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. HONORARIOS CONTABEIS",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "VIGILANCIA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "40",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. A VIGILANCIA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "AJUDA DE CUSTO",
+        "AJUDA SOCIAL"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "38",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. AJUDA DE CUSTO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "SISTEMA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "121",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. SISTEMA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PADARIA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "65",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. PADARIA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CARTORIO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "151",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. CARTORIO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "REEMBOLSO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "153",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. REEMBOLSO",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "MANUTENCAO PREDIAL"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "42",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. MANUTENCAO PREDIAL",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "SALARIO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "83",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. SUSTENTO PASTORAL",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "MINISTERIO INFANTIL"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "103",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. MINISTERIO INFANTIL",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "MINISTERIO DE LOUVOR",
+        "MINISTERIO LOUVOR"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "105",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. MINISTERIO DE LOUVOR",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "WISBECK"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "154",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. PARCELA EQUIP. AUDIO/VISUAL - WISBECK ELETROSOM",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "Alive": [
+    {
+      "palavrasChave": [
+        "DIZIMO",
+        "OFERTA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": "102",
+      "codigoHistorico": null,
+      "historico": "RECEBIMENTO REF. DIZIMOS E OFERTAS",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "DOACAO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": null,
+      "credito": "103",
+      "codigoHistorico": null,
+      "historico": "RECEBIMENTO REF. DOACOES",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "AGUA (DISTRIBUIDORA)",
+        "AGUA DISTRIBUIDORA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "127",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. AGUA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "ENERGIA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "126",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. ENERGIA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "ALUGUEL"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "128",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. ALUGUEL",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "IMPRESSOES"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "105",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. IMPRESSOES",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "LUANA CUCKER"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "108",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. SERVICOS ADMINISTRATIVOS PRESTADOS POR LUANA CUCKER ALVES",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PRAESSLER"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "134",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. SUSTENTO PASTORAL - MARCIA ELLIS E HENRIQUE PRAESSLER",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "PROJETO ELETRICO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "91",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. ATUALIZACAO DO PROJETO ELETRICO IGREJA - ALISSON HENRIQUE",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "COMIDA REUNIAO DE LIDERES"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "100",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. COMIDA REUNIAO DE LIDERES - GIASSI",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "COMIDA REUNIAO LOUVOR"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "100",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. COMIDA REUNIAO LOUVOR - BORA PEDIR",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "SANTA CEIA"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "100",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PGTO REF. COMPRA DE ITENS PARA A SANTA CEIA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "Sindicato dos Cartórios": [
+    {
+      "palavrasChave": [
+        "CONFRATERNIZACAO"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "186",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. CONFRATERNIZAÇÃO DE FINAL DE ANO - CH Nº {CH}",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "DIARIA DO PRESIDENTE"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "187",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. REMUNERAÇÃO AO PRESIDENTE DO SINDICATO - CH Nº {CH}",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "GAVA E LODETTI"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "185",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. HONORARIOS GAVA E LODETTI ADVOGADOS DO PRESIDENTE - CH Nº {CH}",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "DB. COTAS"
+      ],
+      "ehRegex": false,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "107",
+      "credito": null,
+      "codigoHistorico": null,
+      "historico": "PAGAMENTO REF. INTEGRALIZAÇÃO DE CAPITAL - AILOS",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ],
+  "Samdesc e Cias": [
+    {
+      "palavrasChave": [
+        "RENDIMENTO"
+      ],
+      "ehRegex": true,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "32",
+      "credito": "395",
+      "codigoHistorico": null,
+      "historico": "RECEBIMENTO REF. RENDIMENTO S/ APLICAÇÃO FINANCEIRA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "RECEBIMENTO\\s+VENDAS"
+      ],
+      "ehRegex": true,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "32",
+      "credito": "411",
+      "codigoHistorico": null,
+      "historico": "RECEBIMENTO DE CLIENTES DIVERSOS NA DATA",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    },
+    {
+      "palavrasChave": [
+        "CLEDIANE"
+      ],
+      "ehRegex": true,
+      "condicaoValor": null,
+      "ignorar": false,
+      "debito": "33",
+      "credito": "32",
+      "codigoHistorico": null,
+      "historico": "VALOR REF. A DESFALQUE EM  CONTA BANCARIA Nº 3093908-6 STONE INST. DE PAGAMENTO S.A., CFE B. O Nº 00107.2026.0000810",
+      "periodo": null,
+      "pendenteRevisao": false,
+      "origemDinamica": null,
+      "contextoExtra": null
+    }
+  ]
+};
+
+exports.migrarPadroesEstruturados = onCall(
+  { cors: true, timeoutSeconds: 300, memory: "256MiB" },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "É preciso estar logado.");
+    if (!ehAdmin(request)) throw new HttpsError("permission-denied", "Só admin pode rodar a migração de padrões.");
+
+    // Reconhece os blocos de texto que a Fase 1 gravou em "notas" (PADROES_SEED_DETALHADO),
+    // pra tirar de lá — ficam redundantes agora que os mesmos dados moram na subcoleção
+    // estruturada, e ter as duas fontes ao mesmo tempo só confundiria a IA sobre qual seguir.
+    const ehBlocoAntigo = (nota) => typeof nota === "string" && nota.startsWith("Padrões de lançamento (extrato) — parte");
+
+    const empresasSnap = await db.collection("assistenteIA_empresas").get();
+    const resultado = [];
+    for (const doc of empresasSnap.docs) {
+      const emp = doc.data();
+      const padroesDaEmpresa = PADROES_ESTRUTURADOS[emp.nome];
+      if (!padroesDaEmpresa) continue;
+
+      const jaTinha = await doc.ref.collection("padroes").limit(1).get();
+      let gravados = 0;
+      if (jaTinha.empty) {
+        for (const p of padroesDaEmpresa) {
+          await doc.ref.collection("padroes").add({ ...p, criadoEm: FieldValue.serverTimestamp() });
+          gravados++;
+        }
+      }
+
+      const notasAtuais = Array.isArray(emp.notas) ? emp.notas : [];
+      const notasLimpas = notasAtuais.filter((n) => !ehBlocoAntigo(n));
+      let notasRemovidas = 0;
+      if (notasLimpas.length !== notasAtuais.length) {
+        notasRemovidas = notasAtuais.length - notasLimpas.length;
+        await doc.ref.update({ notas: notasLimpas });
+      }
+
+      if (gravados > 0 || notasRemovidas > 0) {
+        resultado.push({ empresa: emp.nome, padroesGravados: gravados, blocosDeTextoRemovidos: notasRemovidas });
+      }
+    }
+    return { empresasAtualizadas: resultado.length, detalhes: resultado };
   }
 );

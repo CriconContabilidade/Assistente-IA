@@ -132,7 +132,7 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
   let r = await pedido('gera os lançamentos');
   confere('um arquivo gerado', r.arquivosGerados.length === 1 && r.arquivosGerados[0].nome === 'lanctos.txt');
   confere('texto final certo', r.text === 'Aqui está o arquivo, revise antes de importar.', r.text);
-  confere('ferramentas enviadas na chamada', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(',') === 'gerar_arquivo,buscar_arquivo,atualizar_fechamento,verificar_cadastro');
+  confere('ferramentas enviadas na chamada', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(',') === 'gerar_arquivo,buscar_arquivo,atualizar_fechamento,verificar_cadastro,consultar_padrao,salvar_padrao', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(','));
   const seg = chamadas[1].messages;
   const resultado = seg[seg.length - 1].content[0];
   confere('2a chamada leva tool_use e tool_result com o mesmo id',
