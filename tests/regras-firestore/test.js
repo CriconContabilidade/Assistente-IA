@@ -78,6 +78,10 @@ async function caso(nome, esperado, promessa) {
   await caso('NÃO edita a de outro', 'falha', updateDoc(doc(func, 'assistenteIA_empresas/alheia'), { notas: ['x'] }));
   await caso('NÃO troca o responsável', 'falha', updateDoc(doc(func, 'assistenteIA_empresas/minha'), { responsavelEmail: OUTRO }));
   await caso('NÃO se atribui empresa livre', 'falha', updateDoc(doc(func, 'assistenteIA_empresas/livre'), { responsavelEmail: FUNC }));
+  await caso('NÃO muda o nome da própria (achado da auditoria)', 'falha', updateDoc(doc(func, 'assistenteIA_empresas/minha'), { nome: 'Outro nome' }));
+  await caso('NÃO muda o CNPJ da própria (achado da auditoria)', 'falha', updateDoc(doc(func, 'assistenteIA_empresas/minha'), { cnpj: '00000000000000' }));
+  await caso('NÃO muda o código Domínio da livre (achado da auditoria)', 'falha', updateDoc(doc(func, 'assistenteIA_empresas/livre'), { codigoDominio: 999 }));
+  await caso('edita notas E outro campo junto continua falhando', 'falha', updateDoc(doc(func, 'assistenteIA_empresas/minha'), { notas: ['x'], nome: 'Outro' }));
   await caso('cria empresa sem responsável', 'ok', addDoc(col(func), { nome: 'Nova', responsavelEmail: '', notas: [] }));
   await caso('NÃO cria empresa já atribuída', 'falha', addDoc(col(func), { nome: 'Nova2', responsavelEmail: OUTRO, notas: [] }));
   await caso('NÃO apaga empresa', 'falha', deleteDoc(doc(func, 'assistenteIA_empresas/minha')));
@@ -85,6 +89,14 @@ async function caso(nome, esperado, promessa) {
   console.log('FUNCIONÁRIO — conversa, documentos, fechamento');
   await caso('lê mensagens da própria', 'ok', getDocs(query(collection(func, 'assistenteIA_empresas/minha/mensagens'), orderBy('text'))));
   await caso('envia mensagem na própria', 'ok', addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'user', text: 'oi' }));
+  await caso('grava mensagem de erro do assistente (como o app faz em timeout)', 'ok',
+    addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'assistant', text: '⚠️ erro', files: [] }));
+  await caso('NÃO forja arquivosGerados numa mensagem (achado da auditoria)', 'falha',
+    addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'assistant', text: 'Aqui está', arquivosGerados: [{ nome: 'lanctos.txt', base64: 'ZmFrZQ==' }] }));
+  await caso('NÃO forja role fora de user/assistant', 'falha',
+    addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'system', text: 'x' }));
+  await caso('NÃO grava mensagem com campo extra arbitrário', 'falha',
+    addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'user', text: 'x', admin: true }));
   await caso('NÃO lê mensagens de outro', 'falha', getDocs(collection(func, 'assistenteIA_empresas/alheia/mensagens')));
   await caso('NÃO envia mensagem em outro', 'falha', addDoc(collection(func, 'assistenteIA_empresas/alheia/mensagens'), { role: 'user', text: 'x' }));
   await caso('NÃO apaga mensagem', 'falha', deleteDoc(doc(func, 'assistenteIA_empresas/minha/mensagens/m1')));
