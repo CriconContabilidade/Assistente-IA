@@ -11,6 +11,12 @@ const { getFirestore: getClientFirestore, doc: clientDoc, getDoc: clientGetDoc, 
 initializeApp();
 const db = getFirestore();
 
+// Mesma lista usada nas regras do Firestore (Banco-de-Horas/firestore.rules, isAdminPonto) e
+// no index.html — três cópias porque cada lugar decide algo diferente (regra de segurança,
+// UI, validação do backend) e nenhum dos três consegue ler os outros dois em runtime. Trocar
+// por custom claims eliminaria a duplicação, mas é mudança maior (fase 3 da auditoria).
+const ADMIN_EMAILS = ["contabilidadecricon@gmail.com", "guilherme.primetherapy@gmail.com", "rh@cricon.com.br"];
+
 // Mesmo banco de CNPJ compartilhado usado pelo Baixas-Parcelas e pelo Cadastro de Clientes e
 // Fornecedores — projeto separado, autenticação anônima (config já é pública/client-side).
 const CIBELE_CONFIG = {
@@ -843,7 +849,6 @@ exports.assistenteChat = onCall(
 
     // Mesma regra de visibilidade do front: admin vê tudo, os demais só a empresa deles
     // (ou sem responsável ainda). Reforça no backend o que a UI já esconde.
-    const ADMIN_EMAILS = ["contabilidadecricon@gmail.com", "guilherme.primetherapy@gmail.com", "rh@cricon.com.br"];
     const userEmail = (request.auth.token.email || "").toLowerCase();
     const isAdmin = ADMIN_EMAILS.includes(userEmail);
     const responsavel = (empresa.responsavelEmail || "").toLowerCase();
@@ -1305,5 +1310,182 @@ exports.assistenteChat = onCall(
     log("finalizado");
 
     return { text, usage: response.usage || null, arquivosGerados };
+  }
+);
+
+// ---------------- semeadura de observações (item 1 da auditoria técnica) ----------------
+// NOTES_SEED e PADROES_SEED_DETALHADO moravam antes no index.html — um arquivo estático
+// publicado sem autenticação nenhuma (GitHub Pages), num repositório PÚBLICO. Continham CPF e
+// nome completo de terceiros (funcionários/beneficiários de empresas-cliente), expostos pra
+// qualquer pessoa no mundo, sem login. Aqui dentro só quem já é admin consegue disparar a
+// semeadura, e os dados nunca chegam ao navegador de ninguém — só o resultado (que observação
+// foi gravada em qual empresa) grava direto no Firestore via Admin SDK.
+
+const NOTES_SEED = {
+    "Gladius": [
+      "Relatórios de aplicação financeira SICREDI (Posição da Carteira / Resgate Fácil e Consolidado Taxa Selic) geram os lançamentos e a Nota de Serviço dos resgates",
+      "Recebimentos de Alvará/Honorários/Aluguel do extrato geram Nota de Serviço",
+      "Demais lançamentos do extrato geral seguem o cadastro de padrões (baixa de serviços/entradas e lançamentos contábeis)"
+    ],
+    "Holding AFA": ["Extrato Unicred/BTG convertido em Escrita Holding e Lançamentos Holding"],
+    "Holding EBR": ["Extrato Unicred/BTG convertido em Escrita Holding e Lançamentos Holding"],
+    "Holding GBG": ["Extrato Unicred/BTG convertido em Escrita Holding e Lançamentos Holding"],
+    "Holding LTA": ["Extrato Unicred/BTG convertido em Escrita Holding e Lançamentos Holding"],
+    "Mantovani": [
+      "Tem cadastro de imóveis/inquilinos com controle de IPTU",
+      "Lançamentos mensais das 6 imobiliárias viram Mantovani (NFS), Baixas de Serviços e Lançamentos"
+    ],
+    "Samdesc e Cias": [
+      "Extrato de conta corrente Stone gera lançamentos de rendimento, recebimento de vendas e saídas",
+      "O extrato de aplicação (RDC) vem num relatório separado do extrato de conta corrente"
+    ],
+    "Bari": [
+      "Relatório de recibos (NF de Locação) gera a planilha/TXT de Nota Fiscal de Serviços",
+      "Data e CNPJ são corrigidos automaticamente — sempre revisar antes de exportar"
+    ],
+    "Alive": [
+      "O relatório de dízimos/ofertas e despesas vem unificado com a Casa do Pai — precisa separar por empresa",
+      "Extrato Bradesco (conta 366) é o extrato desta empresa; casamento por valor e data"
+    ],
+    "Casa do Pai": [
+      "O relatório de dízimos/ofertas e despesas vem unificado com a Alive — precisa separar por empresa",
+      "Extrato Sicredi (conta 244) é o extrato desta empresa; casamento por valor e data"
+    ],
+    "Sindisaúde": [
+      "Extrato Sicoob convertido em lançamentos de razão via cadastro de padrões (palavra-chave/CPF/CNPJ/valor)",
+      "Repasses ACC entram com parcela por pessoa",
+      "Rendimento de aplicação financeira tem regra própria",
+      "Livro Diário do cliente pode ser usado (opcional) pra sugerir categoria do que sobrar sem padrão"
+    ],
+    "Sindicato dos Cartórios": [
+      "Extrato Credcrea + planilha de fluxo de caixa geram os lançamentos juntos",
+      "Recebimentos de contribuição assistencial são reconhecidos automaticamente",
+      "Pagamentos são casados com o histórico da planilha de fluxo de caixa",
+      "Conta débito fica em branco pra completar manualmente quando não identificada"
+    ],
+    "Dario e Freitas": [
+      "Escritório de advocacia — extrato SICOOB",
+      "Baixa notas fiscais quando existem",
+      "Custas processuais e repasses judiciais sem nota ficam como pendência até casar por valor com o lançamento oposto, em qualquer mês"
+    ],
+    "Rodamundo": [
+      "Fonte é o Demonstrativo Financeiro do Grupo Rodamundo, não extrato bancário",
+      "Receitas e despesas são classificadas direto nas contas do plano de contas, com histórico contábil padronizado",
+      "Inclui rendimento de aplicação e IRRF"
+    ],
+    "Cia da Língua": [
+      "Fontes: Contas Pagas, extrato da Aplicação CDB e extrato da conta corrente",
+      "Gera lançamentos e também a baixa de serviços recebidos de clientes"
+    ],
+    "Equilíbrio": [
+      "Baixa de Serviço cobre cartão e Pix",
+      "Baixa de Pagamentos casa Contas a Pagar com o extrato Unicred",
+      "Lançamentos Contábeis seguem cadastro de padrões próprio"
+    ],
+    "Vidal Adv": [
+      "Extrato Banco Inter convertido em lançamentos por cadastro de padrões",
+      "Baixa de serviços recebidos de clientes",
+      "Rendimentos de aplicações de renda fixa: uma conta por CDB"
+    ]
+  };
+
+  // Cadastro de padrões (palavra-chave/CNPJ/CPF -> débito/crédito/histórico) das ferramentas
+  // de lançamento por padrão já existentes no Hub, transcrito pra virar observação permanente
+  // no Stagiario — assim ele já reconhece o mesmo tipo de lançamento sem precisar reperguntar.
+  // Aditivo (nunca sobrescreve nem duplica, ver seedPadroesDetalhados abaixo); pra corrigir um
+  // padrão depois, edite/apague a observação direto na tela da empresa — não precisa mexer aqui.
+
+const PADROES_SEED_DETALHADO = {
+  "Sindisaúde": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"LIQ.COBRANCA SIMPLES\" -> Débito 10 / Crédito 62, histórico \"RECEBIMENTO REF. TAXA NEGOCIAL\"\n\"RECEB. COB HIBRIDA\" -> Débito 10 / Crédito 62, histórico dinâmico (função taxaNegocialComNome — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"37717685949 / 48272124904 / 06793619950 / 09208529983 / 00750073000109\" -> Débito 10 / Crédito 62, histórico dinâmico (função taxaNegocialComNome — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"07447710000103\" -> Débito 10 / Crédito 264, histórico \"RECEBIMENTO DE VALORES A REPASSAR DA MANTENEDORA TIMBÉ DO SUL PARA FUNCIONÁRIOS\"\n\"RECEBIMENTO PIX 02724492000193\" -> Débito 10 / Crédito 100, histórico dinâmico (função estornoSulOnline — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"LIQUIDACAO BOLETO 02724492000193\" -> Débito 100 / Crédito 10, histórico dinâmico (função internetSulOnline — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"RECEBIMENTO PIX\" -> Débito 10 / Crédito 58, histórico dinâmico (função aluguelSalaoFestas — varia por nome/período, seguir padrão de lançamentos anteriores) [só quando valor = 200]\n\"RECEBIMENTO PIX 03907818000180\" -> Débito 10 / Crédito 58, histórico dinâmico (função aluguelSalaoFestas — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"RECEBIMENTO PIX\" -> Débito 10 / Crédito 64, histórico dinâmico (função aluguelQuiostaCampestre — varia por nome/período, seguir padrão de lançamentos anteriores) [só quando valor = 60]\n\"SAQUE DIN AG\" -> Débito 148 / Crédito 10, histórico dinâmico (função compensacaoCheque — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"TARIFA SERV.COBR.TITULOS\" -> Débito 49 / Crédito 10, histórico \"PAGAMENTO REF. TARIFA DE EMISSÃO DE BOLETOS\"\n\"TARIFA LIQUIDACAO PIXCOB\" -> Débito 49 / Crédito 10, histórico \"PAGAMENTO REF. TARIFA DE RECEBIMENTO DE PIX POR BOLETO\"\n\"CUSTAS DE PROTESTO\" -> Débito 103 / Crédito 10, histórico \"PAGAMENTO REF. CUSTAS DE PROTESTO\"\n\"TARIFA DE PROTESTO\" -> Débito 103 / Crédito 10, histórico \"PAGAMENTO REF. TARIFA DE PROTESTO\"",
+    "Padrões de lançamento (extrato) — parte 2:\n\"PASSAGEM PEDAGIO\" -> Débito 102 / Crédito 10, histórico dinâmico (função pedagio — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"00658236997\" -> Débito 104 / Crédito 10, histórico dinâmico (função faxineiraLimpezaSede — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"76935213991\" -> Débito 169 / Crédito 10, histórico dinâmico (função assessoriaImprensa — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"02654498980\" -> Débito 237 / Crédito 10, histórico dinâmico (função equiparacaoSalarialPisoEnfermagem — varia por nome/período, seguir padrão de lançamentos anteriores) [só quando valor = 743; nome: CLEBER RICARDO DA SILVA CANDIDO]\n\"76342000930\" -> Débito 237 / Crédito 10, histórico dinâmico (função equiparacaoSalarialPisoEnfermagem — varia por nome/período, seguir padrão de lançamentos anteriores) [só quando valor = 743; nome: REGINALDO KJHELIN COELHO]\n\"02654498980\" -> Débito 237 / Crédito 10, histórico dinâmico (função verbaRepresentacaoSindicalVariavel — varia por nome/período, seguir padrão de lançamentos anteriores) [nome: CLEBER RICARDO DA SILVA CANDIDO]\n\"12646621906\" -> Débito 237 / Crédito 10, histórico dinâmico (função pensaoAlimenticia — varia por nome/período, seguir padrão de lançamentos anteriores) [funcionário: CLEBER RICARDO DA SILVA CANDIDO; recebedor: LEONARDO HELEODORO CANDIDO]\n\"09074057977\" -> Débito 237 / Crédito 10, histórico dinâmico (função pensaoAlimenticia — varia por nome/período, seguir padrão de lançamentos anteriores) [funcionário: GABRIELA CAMPOS PNKOSKI; recebedor: KAUA PNKOSKI]\n\"02263388940\" -> Débito 237 / Crédito 10, histórico dinâmico (função pensaoAlimenticia — varia por nome/período, seguir padrão de lançamentos anteriores) [funcionário: REGINALDO KJHELIN COELHO; recebedor: ICARO]\n\"64743675000103\" -> Débito 288 / Crédito 10, histórico dinâmico (função honorariosAdvocaticiosAntecipado — varia por nome/período, seguir padrão de lançamentos anteriores) [nome: CHALTON SCHNEIDER ADVOCACIA]\n\"02131384920\" -> Débito 237 / Crédito 10, histórico dinâmico (função verbaRepresentacaoSindical — varia por nome/período, seguir padrão de lançamentos anteriores) [nome: GABRIELA CAMPOS PNKOSKI]\n\"57065825000101\" -> ignorar (não é lançamento contábil)\n\"41762579000107\" -> Débito 244 / Crédito 10, histórico \"PAGAMENTO REF. VALE TRANSPORTE DOS FUNCIONÁRIOS\"\n\"37919090000129\" -> Débito 99 / Crédito 10, histórico dinâmico (função telefoneMesAnterior — varia por nome/período, seguir padrão de lançamentos anteriores)",
+    "Padrões de lançamento (extrato) — parte 3:\n\"08336783000190\" -> Débito 267 / Crédito 10, histórico dinâmico (função energiaCelescSedes — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"60563731000177\" -> Débito 66 / Crédito 10, histórico \"PAGAMENTO REF. MENSALIDADE DA CUT\"\n\"08561701000101\" -> Débito 153 / Crédito 10, histórico dinâmico (função garrafasPersonalizadas — varia por nome/período, seguir padrão de lançamentos anteriores) [só quando valor = 27500]\n\"83646653000170\" -> Débito 267 / Crédito 10, histórico dinâmico (função energiaCooperaliancaRecreativa — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"75565499000183\" -> Débito 66 / Crédito 10, histórico dinâmico (função convenioSindHospitais — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"05411125979 / 91223270963 / 07613542980 / 02332119930 / 07293411944\" -> Débito 269 / Crédito 10, histórico dinâmico (função gratificacaoAgenteSindicalizacao — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"01004788000177\" -> Débito 172 / Crédito 10, histórico \"PAGAMENTO REF. LOCAÇÃO DE COPIADORA SEDE E SUBSEDE\" [só quando valor = 500]\n\"67139485000170\" -> Débito 66 / Crédito 10, histórico \"PAGAMENTO REF. ANUIDADE CNTS 2026\"\n\"02317956967\" -> Débito 237 / Crédito 10, histórico dinâmico (função verbaReuniaoConselheiroFiscal — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"07991146000195\" -> Débito 266 / Crédito 10, histórico \"PAGAMENTO REF. DESPESAS COM CONVÊNIO OBSERVATÓRIO SAÚDE DO TRABALHADOR\"\n\"07469809000106\" -> Débito 100 / Crédito 10, histórico dinâmico (função internetBandaturbo — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"52154298000198\" -> Débito 117 / Crédito 10, histórico \"PAGAMENTO REF. SISTEMA DE WHATSAPP - MAURO ATILA DE CARVALHO MIRANDA\"\n\"20377147000102\" -> Débito 77 / Crédito 10, histórico dinâmico (função musicaFestaPosse — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"33258398000110\" -> Débito 41 / Crédito 10, histórico dinâmico (função buffetFestaPosse — varia por nome/período, seguir padrão de lançamentos anteriores)",
+    "Padrões de lançamento (extrato) — parte 4:\n\"81329047000103\" -> Débito 86 / Crédito 10, histórico dinâmico (função mensalidadeSindes — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"26603609000149\" -> Débito 100 / Crédito 10, histórico dinâmico (função provedorNetworkOrdem — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"82508433000117\" -> Débito 78 / Crédito 10, histórico dinâmico (função aguaCasanSedes — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"02558157000162\" -> Débito 100 / Crédito 10, histórico dinâmico (função internetVivoSedes — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"82568221000125\" -> Débito 78 / Crédito 10, histórico dinâmico (função aguaSubsedeSamae — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"APLICACAO FINANCEIRA CAPTACAO / APLIC.FINANC.AVISO PREVIO CAPTACAO\" -> Débito 108 / Crédito 10, histórico \"VALOR REF. APLICAÇÃO FINANCEIRA - SICREDINVEST EVOLUTIVO\"\n\"RESG.APLIC.FIN.AVISO PREV CAPTACAO\" -> Débito 10 / Crédito 108, histórico \"VALOR REF. RESGATE DE APLICAÇÃO FINANCEIRA - SICREDINVEST EVOLUTIVO\"\n\"CHEQUE COMPE SICREDI\" -> Débito 148 / Crédito 10, histórico dinâmico (função compensacaoCheque — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"76342000930\" -> Débito 103 / Crédito 10, histórico \"PAGAMENTO REF. CUSTAS E EMOLUMENTOS CARTORÁRIOS\" [só quando valor = 49.3]\n\"35562597000142\" -> Débito 61 / Crédito 10, histórico \"PAGAMENTO REF. SEGURO BOXER MGL7939\"\n\"97526100059\" -> Débito 266 / Crédito 10, histórico dinâmico (função convenioOdontologico — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"PAGAMENTO PIX 02724492000193\" -> Débito 100 / Crédito 10, histórico dinâmico (função internetSulOnlinePix — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"83871178000135\" -> Débito 10 / Crédito 262, histórico dinâmico (função recebimentoRepasseAcc — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"28700530000242\" -> Débito 10 / Crédito 264, histórico dinâmico (função recebimentoRepasseAcc — varia por nome/período, seguir padrão de lançamentos anteriores)",
+    "Padrões de lançamento (extrato) — parte 5:\n\"92736040000890\" -> Débito 10 / Crédito 268, histórico dinâmico (função recebimentoRepasseAcc — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"28700530000838\" -> Débito 10 / Crédito 62, histórico dinâmico (função taxaNegocialComNome — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"28700530002881\" -> Débito 10 / Crédito 62, histórico dinâmico (função taxaNegocialComNome — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"05886070966\" -> Débito 10 / Crédito 62, histórico dinâmico (função taxaNegocialComNome — varia por nome/período, seguir padrão de lançamentos anteriores) [só quando valor = 500]"
+  ],
+  "Bari": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"TARIFA COBRANÇA\" -> Débito 384 / Crédito 20, histórico \"PAGAMENTO REF. TARIFA BANCARIA POR EMISSÃO DE BOLETO\"\n\"DÉB.SEGURO EMPRÉSTIMO\" -> Débito 355 / Crédito 20, histórico \"PAGAMENTO REF. SEGURO DE EMPRÉSTIMO\"\n\"DÉB.IOF\" -> Débito 385 / Crédito 20, histórico \"PAGAMENTO REF. IOF\"\n\"JUROS CONTA GARANTIDA\" -> Débito 384 / Crédito 20, histórico \"PAGAMENTO REF. JUROS DE CONTA GARANTIDA SICOOB\"\n\"DÉB.SEGURO PRESTAMISTA\" -> Débito 355 / Crédito 20, histórico \"PAGAMENTO REF. SEGURO PRESTAMISTA\"\n\"DÉBITO PACOTE SERVIÇOS\" -> Débito 384 / Crédito 20, histórico \"PAGAMENTO REF. PACOTE DE SERVIÇOS BANCÁRIOS SICOOB\"\n\"VIS DÉB.CONV.DEMAIS EMPRESAS / DÉB.CONV.DEMAIS EMPRESAS\" -> Débito 627 / Crédito 20, histórico dinâmico (função faturaCartao — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"CRÉD.LIQUIDAÇÃO COBRANÇA\" -> ignorar (não é lançamento contábil)\n\"DÉB.CONV.TRIBUTOS FEDERAIS\" -> ignorar (não é lançamento contábil)\n\"DÉB.TIT.COMPE EFETIVADO\" -> ignorar (não é lançamento contábil)\n\"FERRARA COMERCIO E IMPORTACAO / 08.957.929\" -> Débito (vazio) / Crédito (vazio), histórico não fixo\n\"REM.: CRISTIANO PACHECO BUSSOLO\" -> Débito (vazio) / Crédito 411, histórico \"PAGAMENTO REF. LUCROS DISTRIBUIDOS AO SÓCIO CRISTIANO PACHECO BUSSOLO\"\n\"PIX RECEBIDO - OUTRA IF\" -> ignorar (não é lançamento contábil)"
+  ],
+  "IG": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"CELESC\" -> Débito 334 / Crédito 8, histórico \"PAGAMENTO REF. ENERGIA ELÉTRICA {MM}/{AAAA} - CELESC\" [período: mês anterior]\n\"ADRIANA DE SOUZA\" -> Débito 839 / Crédito 8, histórico \"PAGAMENTO REF. SERVIÇO DE LIMPEZA {MM}/{AAAA} - ADRIANA DE SOUZA\" [período: atual]\n\"PJ CONTA PJ\" -> Débito 384 / Crédito 8, histórico \"PAGAMENTO REF. PACOTE DE SERVIÇOS BANCÁRIOS {MM}/{AAAA} - UNICRED\" [período: atual]\n\"82916818000113\" -> Débito 878 / Crédito 8, histórico \"PAGAMENTO REF. IPTU - MUNICIPIO DE CRICIUMA\"\n\"82996703000186\" -> ignorar (não é lançamento contábil)\n\"18191228000171\" -> ignorar (não é lançamento contábil)\n\"ESTER OLIVIA CERON\" -> ignorar (não é lançamento contábil)\n\"ARLINDO ROCHA ADVOGADOS\" -> ignorar (não é lançamento contábil)\n\"RESGATE APLICACAO\" -> ignorar (não é lançamento contábil)\n\"RECEBIMENTO DE TED / LOCATIVA\" -> ignorar (não é lançamento contábil)\n\"TRANSFERENCIA ENTRE CONTAS\" -> Débito 262 / Crédito 8, histórico \"VALOR REF. DISTRIBUIÇÃO DE LUCROS {MM}/{AAAA} - BARBARA GUIMARÃES\" [período: atual]\n\"PATRICIA GUIMARAES MORMELLO / DEB PIX\" -> Débito 262 / Crédito 8, histórico \"VALOR REF. DISTRIBUIÇÃO DE LUCROS {MM}/{AAAA} - PATRICIA GUIMARÃES\" [período: atual]"
+  ],
+  "Vidal Adv": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"CONTATO INTERNET\" -> Débito 454 / Crédito (vazio), histórico \"PAGAMENTO REF. INTERNET {MM}/{YYYY} - CONTATO (PERIODO MES ANTERIOR)\" [período: mês anterior]\n\"CELESC\" -> Débito 344 / Crédito (vazio), histórico \"PAGAMENTO REF. FATURA DE ENERGIA ELETRICA {MM}/{YYYY} - CELESC (PERIODO MES ANTERIOR)\" [período: mês anterior]\n\"PJBANK\" -> Débito 351 / Crédito (vazio), histórico \"PAGAMENTO REF. CONDOMINIO - SALA TERMINAL CENTRAL\""
+  ],
+  "Equilíbrio": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"ALUGUEL DE MAQUINA\" -> Débito 417 / Crédito 8, histórico \"PGTO REF. ALUGUEL MAQUINA DE CARTÃO {MM}/{AAAA}\" [período: mês anterior]\n\"MULTI AGUAS DISTRIBUIDORA\" -> Débito 360 / Crédito 8, histórico \"PGTO REF. COMPRA DE AGUA MINERAL - MULTI ÁGUAS\"\n\"AGUA / LOGO\" -> Débito 360 / Crédito 8, histórico \"PGTO REF. COMPRA DE AGUA MINERAL COM LOGO\"\n\"IOF\" -> Débito 385 / Crédito 8, histórico \"PGTO REF. IOF\"\n\"LIQUIDACAO DE PARCELA DE EMPRESTIMO / 2024002259\" -> Débito 540 / Crédito 8, histórico \"PAGAMENTO REF. EMPRÉSTIMO UNICRED Nº 2024002259 PARC.{PARC}/{TOTALPARC}\"\n\"INT TELEF TV\" -> Débito 363 / Crédito 8, histórico \"PAGAMENTO REF. FATURA DA VIVO DE INTERNET E TV {MM}/{AAAA}\" [período: atual]\n\"CARTAO VISA\" -> Débito 462 / Crédito 8, histórico \"PAGAMENTO REF. FATURA DO CARTÃO DE CRÉDITO {MM}/{AAAA}\" [período: mês anterior]\n\"CASAN\" -> Débito 346 / Crédito 8, histórico \"PAGAMENTO REF. FATURA DE ÁGUA CASAN {MM}/{AAAA}\" [período: atual]\n\"ALUGUEL\" -> Débito 345 / Crédito 8, histórico \"PAGAMENTO REF. ALUGUEL LOCATIVA {MM}/{AAAA}\" [período: mês anterior]\n\"OXIGENIO\" -> Débito 407 / Crédito 8, histórico \"PAGAMENTO REF. ALUGUEL DE CILINDROS E TANQUE DE OXIGÊNIO\"\n\"CONTABILIDADE\" -> Débito 222 / Crédito 8, histórico \"PGTO REF. HONORÁRIOS CONTÁBEIS {MM}/{AAAA} - CRICON CONTABILIDADE\" [período: mês anterior]\n\"PORTO SEGUROS\" -> Débito 150 / Crédito 8, histórico \"PAGAMENTO REF. SEGURO DA CLINICA - PORTO SEGUROS\"\n\"CELESC\" -> Débito 344 / Crédito 8, histórico \"PAGAMENTO REF. FATURA DE ENERGIA ELÉTRICA {MM}/{AAAA} - CELESC\" [período: atual]\n\"ALIMENTA\" -> Débito 352 / Crédito 8, histórico \"PGTO REF. VALE ALIMENTAÇÃO - CARTÃO PLUXEE\""
+  ],
+  "Agenor": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"PJBANK\" -> Débito 222 / Crédito (vazio), histórico dinâmico (função honorariosPagto — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"RECEITA FEDERAL\" -> ignorar (não é lançamento contábil)\n\"PLANO INT CAPITAL\" -> Débito 76 / Crédito (vazio), histórico dinâmico (função capitalMesAtual — varia por nome/período, seguir padrão de lançamentos anteriores)\n\"APLIC. FINANC. FUNDOS / APLIC FINANC FUNDOS / APLICACAO FINANC FUNDOS\" -> Débito 9 / Crédito (vazio), histórico \"VALOR REF. APLICAÇÃO FINANCEIRA SICREDI\"\n\"83845701000159\" -> Débito 340 / Crédito (vazio), histórico \"PAGAMENTO REF. CUSTAS PROCESSUAIS - TJSC\"\n\"AGENOR DAUFENBACH\" -> Débito 241 / Crédito (vazio), histórico \"PAGAMENTO REF. ADIANTAMENTO DE LUCROS - AGENOR DAUFENBACH JUNIOR\"\n\"DANIELA DE OLIVEIRA\" -> Débito 231 / Crédito (vazio), histórico \"PAGAMENTO REF. ADIANTAMENTO DE LUCROS - DANIELA DE OLIVEIRA\"\n\"GABRIELA ROVARIS\" -> Débito 251 / Crédito (vazio), histórico \"PAGAMENTO REF. ADIANTAMENTO DE LUCROS - GABRIELA ROVARIS\"\n\"MAIARA MAFIOLETTI\" -> Débito 504 / Crédito (vazio), histórico \"PAGAMENTO REF. ADIANTAMENTO DE LUCROS - MAIARA MAFIOLETTI MACARINI\""
+  ],
+  "Cia da Língua": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"LOCATIVA\" -> Débito (vazio) / Crédito (vazio), histórico \"PAGAMENTO REF. ALUGUEL DO MÊS {MM}/{YYYY} - LOCATIVA\" [período: mês anterior]\n\"CONDOMINIO / CONTASUL / JAIME SCREMIN\" -> Débito (vazio) / Crédito (vazio), histórico \"PAGAMENTO REF. CONDOMINIO ED. JAIME SCREMIN {MM}/{YYYY}\" [período: mês anterior]\n\"CLARO\" -> Débito (vazio) / Crédito (vazio), histórico \"PAGAMENTO REF. FATURA DE TELEFONE {MM}/{YYYY} - CLARO\" [período: atual]\n\"CELESC\" -> Débito (vazio) / Crédito (vazio), histórico \"PAGAMENTO REF. FATURA DE ENERGIA ELETRICA SALA 403 {MM}/{YYYY} - CELESC\" [período: mês anterior]\n\"UNIMED\" -> Débito (vazio) / Crédito (vazio), histórico \"PAGAMENTO REF. PLANO DE SAUDE {MM}/{YYYY} - UNIMED\" [período: mês anterior]\n\"CRICON\" -> Débito (vazio) / Crédito (vazio), histórico \"PAGAMENTO REF. HONORARIOS CONTABEIS {MM}/{YYYY} - CRICON CONTABILIDADE\" [período: atual]\n\"FGTS\" -> ignorar (não é lançamento contábil)\n\"IRRF\" -> ignorar (não é lançamento contábil)\n\"SIMPLES NACIONAL\" -> ignorar (não é lançamento contábil)"
+  ],
+  "Casa do Pai": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"DIZIMO / OFERTA\" -> Débito (vazio) / Crédito 54, histórico \"RECEBIMENTO REF. DIZIMOS E OFERTAS\"\n\"ALIVE EUA / ALIVE CHURCH\" -> Débito (vazio) / Crédito 152, histórico \"RECEBIMENTO REF. DOACAO ALIVE CHURCH EUA\"\n\"DOACAO\" -> Débito (vazio) / Crédito 152, histórico \"RECEBIMENTO REF. DOACOES\"\n\"AGUA (DISTRIBUIDORA) / AGUA DISTRIBUIDORA\" -> Débito 78 / Crédito (vazio), histórico \"PGTO REF. AGUA\"\n\"ENERGIA ELETRICA\" -> Débito 120 / Crédito (vazio), histórico \"PGTO REF. ENERGIA ELETRICA\"\n\"INTERNET\" -> Débito 100 / Crédito (vazio), histórico \"PGTO REF. INTERNET\"\n\"ALUGUEL\" -> Débito 71 / Crédito (vazio), histórico \"PGTO REF. ALUGUEL\"\n\"ALVARA\" -> Débito 68 / Crédito (vazio), histórico \"PGTO REF. ALVARA\"\n\"DESPESAS BANCARIAS\" -> Débito 49 / Crédito (vazio), histórico \"PGTO REF. DESPESAS BANCARIAS\"\n\"CARTAO DE CREDITO\" -> Débito 145 / Crédito (vazio), histórico \"PGTO REF. FATURA DO CARTAO DE CREDITO\"\n\"CONTABILIDADE\" -> Débito 85 / Crédito (vazio), histórico \"PGTO REF. HONORARIOS CONTABEIS\"\n\"VIGILANCIA\" -> Débito 40 / Crédito (vazio), histórico \"PGTO REF. A VIGILANCIA\"\n\"AJUDA DE CUSTO / AJUDA SOCIAL\" -> Débito 38 / Crédito (vazio), histórico \"PGTO REF. AJUDA DE CUSTO\"\n\"SISTEMA\" -> Débito 121 / Crédito (vazio), histórico \"PGTO REF. SISTEMA\"",
+    "Padrões de lançamento (extrato) — parte 2:\n\"PADARIA\" -> Débito 65 / Crédito (vazio), histórico \"PGTO REF. PADARIA\"\n\"CARTORIO\" -> Débito 151 / Crédito (vazio), histórico \"PGTO REF. CARTORIO\"\n\"REEMBOLSO\" -> Débito 153 / Crédito (vazio), histórico \"PGTO REF. REEMBOLSO\"\n\"MANUTENCAO PREDIAL\" -> Débito 42 / Crédito (vazio), histórico \"PGTO REF. MANUTENCAO PREDIAL\"\n\"SALARIO\" -> Débito 83 / Crédito (vazio), histórico \"PGTO REF. SUSTENTO PASTORAL\"\n\"MINISTERIO INFANTIL\" -> Débito 103 / Crédito (vazio), histórico \"PGTO REF. MINISTERIO INFANTIL\"\n\"MINISTERIO DE LOUVOR / MINISTERIO LOUVOR\" -> Débito 105 / Crédito (vazio), histórico \"PGTO REF. MINISTERIO DE LOUVOR\"\n\"WISBECK\" -> Débito 154 / Crédito (vazio), histórico \"PGTO REF. PARCELA EQUIP. AUDIO/VISUAL - WISBECK ELETROSOM\""
+  ],
+  "Alive": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"DIZIMO / OFERTA\" -> Débito (vazio) / Crédito 102, histórico \"RECEBIMENTO REF. DIZIMOS E OFERTAS\"\n\"DOACAO\" -> Débito (vazio) / Crédito 103, histórico \"RECEBIMENTO REF. DOACOES\"\n\"AGUA (DISTRIBUIDORA) / AGUA DISTRIBUIDORA\" -> Débito 127 / Crédito (vazio), histórico \"PGTO REF. AGUA\"\n\"ENERGIA\" -> Débito 126 / Crédito (vazio), histórico \"PGTO REF. ENERGIA\"\n\"ALUGUEL\" -> Débito 128 / Crédito (vazio), histórico \"PGTO REF. ALUGUEL\"\n\"IMPRESSOES\" -> Débito 105 / Crédito (vazio), histórico \"PGTO REF. IMPRESSOES\"\n\"LUANA CUCKER\" -> Débito 108 / Crédito (vazio), histórico \"PGTO REF. SERVICOS ADMINISTRATIVOS PRESTADOS POR LUANA CUCKER ALVES\"\n\"PRAESSLER\" -> Débito 134 / Crédito (vazio), histórico \"PGTO REF. SUSTENTO PASTORAL - MARCIA ELLIS E HENRIQUE PRAESSLER\"\n\"PROJETO ELETRICO\" -> Débito 91 / Crédito (vazio), histórico \"PGTO REF. ATUALIZACAO DO PROJETO ELETRICO IGREJA - ALISSON HENRIQUE\"\n\"COMIDA REUNIAO DE LIDERES\" -> Débito 100 / Crédito (vazio), histórico \"PGTO REF. COMIDA REUNIAO DE LIDERES - GIASSI\"\n\"COMIDA REUNIAO LOUVOR\" -> Débito 100 / Crédito (vazio), histórico \"PGTO REF. COMIDA REUNIAO LOUVOR - BORA PEDIR\"\n\"SANTA CEIA\" -> Débito 100 / Crédito (vazio), histórico \"PGTO REF. COMPRA DE ITENS PARA A SANTA CEIA\""
+  ],
+  "Sindicato dos Cartórios": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"CONFRATERNIZACAO\" -> Débito 186 / Crédito (vazio), histórico \"PAGAMENTO REF. CONFRATERNIZAÇÃO DE FINAL DE ANO - CH Nº {CH}\"\n\"DIARIA DO PRESIDENTE\" -> Débito 187 / Crédito (vazio), histórico \"PAGAMENTO REF. REMUNERAÇÃO AO PRESIDENTE DO SINDICATO - CH Nº {CH}\"\n\"GAVA E LODETTI\" -> Débito 185 / Crédito (vazio), histórico \"PAGAMENTO REF. HONORARIOS GAVA E LODETTI ADVOGADOS DO PRESIDENTE - CH Nº {CH}\"\n\"DB. COTAS\" -> Débito 107 / Crédito (vazio), histórico \"PAGAMENTO REF. INTEGRALIZAÇÃO DE CAPITAL - AILOS\""
+  ],
+  "Samdesc e Cias": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"regex:RENDIMENTO\" -> Débito 32 / Crédito 395, histórico \"RECEBIMENTO REF. RENDIMENTO S/ APLICAÇÃO FINANCEIRA\"\n\"regex:RECEBIMENTO\\s+VENDAS\" -> Débito 32 / Crédito 411, histórico \"RECEBIMENTO DE CLIENTES DIVERSOS NA DATA\"\n\"regex:CLEDIANE\" -> Débito 33 / Crédito 32, histórico \"VALOR REF. A DESFALQUE EM  CONTA BANCARIA Nº 3093908-6 STONE INST. DE PAGAMENTO S.A., CFE B. O Nº 00107.2026.0000810\""
+  ],
+  "Holding AFA": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"PJBANK / JACHELINE DAMASIO / CRICON\" -> Débito 434 / Crédito 7, código do histórico 7\n\"APLICACAO FINANCEIRA / APLICAÇÃO FINANCEIRA / APLIC FINANC\" -> Débito 20 / Crédito 7, código do histórico 80\n\"GT CLINICA / GT CLÍNICA\" -> Débito 7 / Crédito 13, código do histórico 1\n\"RESGATE APLICACAO FINANCEIRA / RESGATE APLICAÇÃO FINANCEIRA / RESG APLIC FINANC\" -> ignorar (não é lançamento contábil)\n\"PIX ENVIADO PARA FERNANDA FREITAS SIMON ALTHOFF\" -> Débito (vazio) / Crédito (vazio), histórico não fixo\n\"PIX ENVIADO PARA ANDRE ANTONIO ALTHOFF\" -> Débito (vazio) / Crédito (vazio), histórico não fixo"
+  ],
+  "Holding EBR": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"PJBANK / JACHELINE DAMASIO / CRICON\" -> Débito 434 / Crédito 7, código do histórico 7\n\"APLICACAO FINANCEIRA / APLICAÇÃO FINANCEIRA / APLIC FINANC\" -> Débito 20 / Crédito 7, código do histórico 80\n\"GT CLINICA / GT CLÍNICA\" -> Débito 7 / Crédito 13, código do histórico 1\n\"RESGATE APLICACAO FINANCEIRA / RESGATE APLICAÇÃO FINANCEIRA / RESG APLIC FINANC\" -> ignorar (não é lançamento contábil)\n\"PIX ENVIADO PARA FERNANDA FREITAS SIMON ALTHOFF\" -> Débito (vazio) / Crédito (vazio), histórico não fixo\n\"PIX ENVIADO PARA ANDRE ANTONIO ALTHOFF\" -> Débito (vazio) / Crédito (vazio), histórico não fixo"
+  ],
+  "Holding GBG": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"PJBANK / JACHELINE DAMASIO / CRICON\" -> Débito 434 / Crédito 7, código do histórico 7\n\"APLICACAO FINANCEIRA / APLICAÇÃO FINANCEIRA / APLIC FINANC\" -> Débito 20 / Crédito 7, código do histórico 80\n\"GT CLINICA / GT CLÍNICA\" -> Débito 7 / Crédito 13, código do histórico 1\n\"RESGATE APLICACAO FINANCEIRA / RESGATE APLICAÇÃO FINANCEIRA / RESG APLIC FINANC\" -> ignorar (não é lançamento contábil)\n\"PIX ENVIADO PARA FERNANDA FREITAS SIMON ALTHOFF\" -> Débito (vazio) / Crédito (vazio), histórico não fixo\n\"PIX ENVIADO PARA ANDRE ANTONIO ALTHOFF\" -> Débito (vazio) / Crédito (vazio), histórico não fixo"
+  ],
+  "Holding LTA": [
+    "Padrões de lançamento (extrato) — parte 1:\n\"PJBANK / JACHELINE DAMASIO / CRICON\" -> Débito 434 / Crédito 7, código do histórico 7\n\"APLICACAO FINANCEIRA / APLICAÇÃO FINANCEIRA / APLIC FINANC\" -> Débito 20 / Crédito 7, código do histórico 80\n\"GT CLINICA / GT CLÍNICA\" -> Débito 7 / Crédito 13, código do histórico 1\n\"RESGATE APLICACAO FINANCEIRA / RESGATE APLICAÇÃO FINANCEIRA / RESG APLIC FINANC\" -> ignorar (não é lançamento contábil)\n\"PIX ENVIADO PARA FERNANDA FREITAS SIMON ALTHOFF\" -> Débito (vazio) / Crédito (vazio), histórico não fixo\n\"PIX ENVIADO PARA ANDRE ANTONIO ALTHOFF\" -> Débito (vazio) / Crédito (vazio), histórico não fixo"
+  ]
+};
+
+exports.seedObservacoesEmpresas = onCall(
+  { cors: true, timeoutSeconds: 120, memory: "256MiB" },
+  async (request) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "É preciso estar logado.");
+    const userEmail = (request.auth.token.email || "").toLowerCase();
+    if (!ADMIN_EMAILS.includes(userEmail)) {
+      throw new HttpsError("permission-denied", "Só admin pode rodar a semeadura de observações.");
+    }
+
+    const empresasSnap = await db.collection("assistenteIA_empresas").get();
+    const resultado = [];
+    for (const doc of empresasSnap.docs) {
+      const emp = doc.data();
+      const notasAtuais = Array.isArray(emp.notas) ? emp.notas : [];
+      const mudancas = [];
+
+      // 1) NOTES_SEED — só na primeira vez (empresa sem nenhuma observação ainda), igual ao
+      // comportamento antigo do frontend: nunca sobrescreve o que alguém já ensinou.
+      const seedBasico = NOTES_SEED[emp.nome];
+      if (seedBasico && notasAtuais.length === 0) {
+        await doc.ref.update({ notas: seedBasico });
+        mudancas.push(`observações básicas (${seedBasico.length})`);
+      }
+
+      // 2) PADROES_SEED_DETALHADO — aditivo e idempotente: só adiciona os blocos que ainda
+      // não estão nas notas desta empresa (nunca duplica, nunca apaga edição manual).
+      const blocosDetalhados = PADROES_SEED_DETALHADO[emp.nome];
+      if (blocosDetalhados) {
+        const notasDepoisDoPasso1 = seedBasico && notasAtuais.length === 0 ? seedBasico : notasAtuais;
+        const faltando = blocosDetalhados.filter((b) => !notasDepoisDoPasso1.includes(b));
+        if (faltando.length > 0) {
+          await doc.ref.update({ notas: FieldValue.arrayUnion(...faltando) });
+          mudancas.push(`${faltando.length} bloco(s) de padrões detalhados`);
+        }
+      }
+
+      if (mudancas.length > 0) resultado.push({ empresa: emp.nome, mudancas });
+    }
+    return { empresasAtualizadas: resultado.length, detalhes: resultado };
   }
 );
