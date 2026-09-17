@@ -76,6 +76,19 @@ const padroesDe = (empId) => [...banco.entries()].filter(([k]) => k.startsWith(`
   const r2 = await migrarPadroesEstruturados({ auth: { token: { email: 'contabilidadecricon@gmail.com' } } });
   confere('continua com 13 padrões (não dobrou pra 26)', padroesDe('bari').length === 13, padroesDe('bari').length);
 
+  console.log('\n4) function cai no meio da migração de uma empresa -> rodar de novo completa o resto (achado do Codex)');
+  banco.clear();
+  banco.set('assistenteIA_empresas/bari', { nome: 'Bari', notas: [] });
+  // Simula uma tentativa anterior que só conseguiu gravar os 3 primeiros padrões antes de cair
+  // (timeout, deploy no meio, etc.) — com ID determinístico, é exatamente isso que o código real
+  // grava nos primeiros índices.
+  for (let i = 0; i < 3; i++) banco.set(`assistenteIA_empresas/bari/padroes/migrado-${i}`, { simuleiParcial: true, indice: i });
+  const r4 = await migrarPadroesEstruturados({ auth: { token: { email: 'contabilidadecricon@gmail.com' } } });
+  confere('completa os 13 (não fica travada em 3 pra sempre)', padroesDe('bari').length === 13, padroesDe('bari').length);
+  confere('os 3 primeiros continuam do jeito que estavam (não sobrescreve o que já tinha)',
+    banco.get('assistenteIA_empresas/bari/padroes/migrado-0').simuleiParcial === true);
+  confere('relatou só os 10 que faltavam, não os 13 de novo', r4.detalhes.find((d) => d.empresa === 'Bari').padroesGravados === 10, r4.detalhes);
+
   console.log(falhas === 0 ? '\nTUDO OK' : `\n${falhas} FALHA(S)`);
   process.exit(falhas === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });
