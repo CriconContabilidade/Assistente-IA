@@ -284,12 +284,12 @@
     background: var(--accent-grad); color: white; font-size: 0.65rem; font-weight: 700;
     padding: 1px 7px; border-radius: 999px; margin-left: 4px; vertical-align: middle;
   }
-  .assign-btn {
+  .assign-btn, .effort-btn {
     flex-shrink: 0; background: none; border: none; color: var(--text-faint);
     cursor: pointer; font-size: 0.85rem; opacity: 0; transition: opacity .15s;
   }
-  .empresa-item:hover .assign-btn { opacity: 1; }
-  .assign-btn:hover { color: var(--accent2); }
+  .empresa-item:hover .assign-btn, .empresa-item:hover .effort-btn { opacity: 1; }
+  .assign-btn:hover, .effort-btn:hover { color: var(--accent2); }
 
   /* ---------- main chat area ---------- */
   .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -460,6 +460,20 @@
   .typing span:nth-child(3) { animation-delay: .3s; }
   @keyframes typingBounce { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
   .typing-label { font-size: 0.78rem; color: var(--text-dim); margin-top: 2px; }
+  /* barrinha dourada (cor da logo) enquanto a IA está processando — não é percentual real (a
+     resposta só chega inteira no fim, não dá pra medir progresso de verdade), só indica "ainda
+     trabalhando nisso" de um jeito visual mais vivo que os três pontinhos sozinhos. */
+  .typing-progress { width: 100%; height: 3px; border-radius: 999px; overflow: hidden; background: rgba(242,193,78,0.15); margin-top: 8px; }
+  .typing-progress::after {
+    content: ''; display: block; height: 100%; width: 40%; border-radius: 999px;
+    background: linear-gradient(90deg, transparent, #f2c14e, transparent);
+    box-shadow: 0 0 8px rgba(242,193,78,0.7);
+    animation: typingProgressSweep 1.4s ease-in-out infinite;
+  }
+  @keyframes typingProgressSweep {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(250%); }
+  }
 
   .send-btn:disabled { opacity: 0.7; cursor: wait; animation: sendPulse 1.4s infinite ease-in-out; }
   @keyframes sendPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(56,189,248,0.4); } 50% { box-shadow: 0 0 0 6px rgba(56,189,248,0); } }
@@ -1062,6 +1076,17 @@
     await updateDoc(doc(db, "assistenteIA_empresas", emp.id), { responsavelEmail: val.trim().toLowerCase() });
   }
 
+  // Nível de "esforço" (profundidade de raciocínio) da IA por empresa — mesmos valores aceitos
+  // pelo backend (functions/index.js). Padrão "low": a maioria das empresas só faz categorização
+  // mecânica de extrato, que não precisa de raciocínio pesado, então o padrão prioriza velocidade.
+  const ESFORCO_ORDEM = ['low', 'medium', 'high'];
+  const ESFORCO_LABEL = { low: 'Baixo (rápido)', medium: 'Médio', high: 'Alto (mais lento)' };
+  async function cicleEsforco(emp) {
+    const atualIdx = ESFORCO_ORDEM.indexOf(emp.esforco || 'low');
+    const proximo = ESFORCO_ORDEM[(atualIdx + 1) % ESFORCO_ORDEM.length];
+    await updateDoc(doc(db, "assistenteIA_empresas", emp.id), { esforco: proximo });
+  }
+
   function renderEmpresaList(filter = "") {
     const q = filter.trim().toLowerCase();
     const list = empresas.filter(e => visibleToCurrentUser(e) && String(e.nome || '').toLowerCase().includes(q));
@@ -1093,10 +1118,21 @@
         assign.title = 'Atribuir responsável';
         assign.textContent = '👤';
         item.appendChild(assign);
+
+        const effort = document.createElement('button');
+        effort.className = 'effort-btn';
+        effort.type = 'button';
+        effort.title = `Nível de raciocínio da IA: ${ESFORCO_LABEL[emp.esforco] || ESFORCO_LABEL.low} (clique pra trocar)`;
+        effort.textContent = '⚡';
+        item.appendChild(effort);
       }
       item.querySelector('.assign-btn')?.addEventListener('click', (e) => {
         e.stopPropagation();
         promptAssign(emp);
+      });
+      item.querySelector('.effort-btn')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        cicleEsforco(emp);
       });
       item.addEventListener('click', () => selectEmpresa(emp.id));
       empresaListEl.appendChild(item);
@@ -1637,7 +1673,9 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     label.className = 'typing-label';
     label.id = 'typingLabel';
     label.textContent = typingLabelText;
-    bubble.append(dots, label);
+    const progress = document.createElement('div');
+    progress.className = 'typing-progress';
+    bubble.append(dots, label, progress);
     t.append(avatar, bubble);
     chatBody.appendChild(t);
   }

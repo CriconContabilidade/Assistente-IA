@@ -1187,6 +1187,12 @@ exports.assistenteChat = onCall(
     // repete sem ferramentas: a conversa continua (sem gerar arquivo) e o log deixa claro o
     // motivo. Só vale antes de qualquer ferramenta ter sido usada nesta conversa.
     let ferramentasAtivas = true;
+    // Nível de "esforço" (profundidade de raciocínio) da IA, configurável por empresa — a
+    // maioria dos clientes só faz categorização mecânica de extrato, que não precisa de muito
+    // raciocínio, então o padrão é o mais baixo (mais rápido e mais barato). Só sobe pra quem o
+    // admin marcar manualmente na tela (empresas com casos mais ambíguos/contraditórios).
+    const NIVEIS_ESFORCO = new Set(["low", "medium", "high", "xhigh", "max"]);
+    const esforco = NIVEIS_ESFORCO.has(empresa.esforco) ? empresa.esforco : "low";
     async function chamarIA() {
       // Streaming (não .create()) porque max_tokens é alto o bastante que o SDK recusa de cara
       // ("Streaming is required for operations that may take longer than 10 minutes") — visto em
@@ -1203,6 +1209,7 @@ exports.assistenteChat = onCall(
         // mais espaço de saída.
         max_tokens: 64000,
         system: systemPrompt,
+        output_config: { effort: esforco },
         ...(ferramentasAtivas ? { tools: FERRAMENTAS } : {}),
         messages,
       }).finalMessage();
