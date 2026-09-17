@@ -1,6 +1,10 @@
-// Testa o achado 8 da auditoria: chamada repetida com o mesmo requestId (retry do navegador
-// após um timeout aparente) não reprocessa do zero — devolve a resposta já gravada, ou avisa
-// que já está em processamento se ainda não terminou.
+// Testa a idempotência (item 8 da auditoria original + correções apontadas pelo Codex):
+// - o resultado fica no documento de processamento, não é mais buscado por query em
+//   "mensagens" sem filtro de role (achado: podia devolver a própria pergunta do usuário
+//   como se fosse a resposta da IA — reproduzido explicitamente no cenário 2 abaixo);
+// - erro na primeira tentativa marca "failed" e libera o requestId pra tentar de novo, em vez
+//   de travar pra sempre (achado do Codex);
+// - concorrência real (duas chamadas, nenhuma terminou) continua recusando a segunda.
 const Module = require('module');
 const ARQ = 'C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js';
 
@@ -10,10 +14,7 @@ function docRef(c) {
     id: c.split('/').pop(), path: c,
     async get() { const d = banco.get(c); return { exists: !!d, id: this.id, data: () => d, ref: this }; },
     async set(dados, opts) { banco.set(c, opts && opts.merge ? { ...(banco.get(c) || {}), ...dados } : dados); },
-    async create(dados) {
-      if (banco.has(c)) { const e = new Error('ALREADY_EXISTS: ' + c); e.code = 6; throw e; }
-      banco.set(c, dados);
-    },
+    async create(dados) { if (banco.has(c)) { const e = new Error('ALREADY_EXISTS: ' + c); e.code = 6; throw e; } banco.set(c, dados); },
     collection: (n) => colRef(`${c}/${n}`),
   };
 }
@@ -29,7 +30,18 @@ function colRef(c) {
   };
   return { ...q, doc: (id) => docRef(`${c}/${id || 'auto' + (++seq)}`), async add(dados) { const r = docRef(`${c}/auto${++seq}`); await r.set(dados); return r; } };
 }
-const fakeDb = { collection: (n) => colRef(n) };
+// Transação simplificada (síncrona por baixo, só pra refletir o fluxo lógico — não testa
+// isolamento real de concorrência entre processos, que não existe em JS single-threaded).
+const fakeDb = {
+  collection: (n) => colRef(n),
+  async runTransaction(fn) {
+    const tx = {
+      async get(ref) { return ref.get(); },
+      set(ref, dados, opts) { banco.set(ref.path, opts && opts.merge ? { ...(banco.get(ref.path) || {}), ...dados } : dados); },
+    };
+    return fn(tx);
+  },
+};
 
 let roteiro = [];
 let chamadasIA = 0;
@@ -37,8 +49,6 @@ class FakeAnthropic {
   constructor() { this.messages = { create: async (params) => { chamadasIA++; const p = roteiro.shift(); if (!p) throw new Error('roteiro acabou'); return typeof p === 'function' ? p(params) : p; } }; }
 }
 const txt = (t) => ({ type: 'text', text: t });
-let idSeq = 0;
-const uso = (name, input) => ({ type: 'tool_use', id: `toolu_${++idSeq}`, name, input });
 const resp = (content, stop_reason) => ({ content, stop_reason, usage: { input_tokens: 10, output_tokens: 5 } });
 
 class HttpsError extends Error { constructor(c, m) { super(m); this.code = c; } }
@@ -46,7 +56,10 @@ const falsos = {
   'firebase-functions/v2/https': { onCall: (o, f) => f, HttpsError },
   'firebase-functions/params': { defineSecret: () => ({ value: () => 'x' }) },
   'firebase-admin/app': { initializeApp() {} },
-  'firebase-admin/firestore': { getFirestore: () => fakeDb, FieldValue: { serverTimestamp: () => 'T', arrayUnion: (...x) => ({ __union: x }) } },
+  // serverTimestamp precisa se comportar como um Timestamp real (com toMillis()) — é assim que
+  // o código de produção mede se o lease de um processamento "running" já expirou.
+  'firebase-admin/firestore': { getFirestore: () => fakeDb, FieldValue: { serverTimestamp: () => ({ toMillis: () => Date.now() }), arrayUnion: (...x) => ({ __union: x }) } },
+  'firebase-admin/auth': { getAuth: () => ({}) },
   '@anthropic-ai/sdk': FakeAnthropic,
   exceljs: {},
   'firebase/app': { initializeApp: () => ({}) },
@@ -65,50 +78,70 @@ function prepararEmpresa() {
   chamadasIA = 0;
 }
 const pedido = (message, requestId) => handler({ auth: { token: { email: 'contabilidadecricon@gmail.com' } }, data: { empresaId: 'mv', message, history: [], files: [], requestId } });
+const processamento = (id) => banco.get(`assistenteIA_empresas/mv/processamentos/${id}`);
 
 (async () => {
-  console.log('1) chamada normal com requestId — processa e grava o requestId na mensagem');
+  console.log('1) chamada normal com requestId — processa e marca "completed"');
   prepararEmpresa();
   roteiro = [resp([txt('Oi, tudo certo.')], 'end_turn')];
-  let r = await pedido('oi', 'req-abc-1');
+  let r = await pedido('oi', 'req-1');
   confere('respondeu normal', r.text === 'Oi, tudo certo.', r.text);
   confere('IA foi chamada 1 vez', chamadasIA === 1);
-  const msgs = [...banco.entries()].filter(([k]) => k.includes('/mensagens/'));
-  confere('mensagem gravada com o requestId', msgs.some(([, v]) => v.requestId === 'req-abc-1'));
+  confere('processamento marcado completed com o texto certo', processamento('req-1').status === 'completed' && processamento('req-1').text === 'Oi, tudo certo.', processamento('req-1'));
 
-  console.log('\n2) retry com o MESMO requestId depois que a 1a já terminou — devolve sem rechamar a IA');
-  const r2 = await pedido('oi', 'req-abc-1');
-  confere('devolve a mesma resposta', r2.text === 'Oi, tudo certo.', r2.text);
+  console.log('\n2) retry NUNCA devolve a mensagem do USUÁRIO como se fosse da IA (achado do Codex)');
+  // reproduz o cenário real: a mensagem de usuário grava o MESMO requestId no Firestore (é
+  // assim que o app funciona) — a query antiga (sem filtrar role) podia achar essa em vez do
+  // resultado de verdade. Agora nem existe mais query nenhuma em "mensagens" para isso.
+  banco.set('assistenteIA_empresas/mv/mensagens/msgUsuario', { role: 'user', text: 'oi', requestId: 'req-1' });
+  const r2 = await pedido('oi', 'req-1');
+  confere('devolve a resposta da IA, NÃO a pergunta do usuário', r2.text === 'Oi, tudo certo.', r2.text);
   confere('IA NÃO foi chamada de novo', chamadasIA === 1, chamadasIA);
 
-  console.log('\n3) requestId diferente processa normalmente (não é bloqueado por engano)');
+  console.log('\n3) requestId diferente processa normalmente');
   roteiro = [resp([txt('Outra pergunta, outra resposta.')], 'end_turn')];
-  const r3 = await pedido('outra coisa', 'req-abc-2');
+  const r3 = await pedido('outra coisa', 'req-2');
   confere('processou de novo com requestId novo', r3.text === 'Outra pergunta, outra resposta.', r3.text);
   confere('IA foi chamada de novo (2a vez no total)', chamadasIA === 2, chamadasIA);
 
-  console.log('\n4) duas chamadas concorrentes com o MESMO requestId (nenhuma delas terminou ainda)');
+  console.log('\n4) duas chamadas concorrentes com o MESMO requestId (nenhuma terminou ainda)');
   prepararEmpresa();
   let liberar;
   const travaManual = new Promise((res) => { liberar = res; });
-  roteiro = [
-    async () => { await travaManual; return resp([txt('Terminei.')], 'end_turn'); }, // 1a chamada: fica "pendurada" até eu liberar
-  ];
+  roteiro = [async () => { await travaManual; return resp([txt('Terminei.')], 'end_turn'); }];
   const p1 = pedido('gera algo demorado', 'req-concorrente');
-  await new Promise((r) => setTimeout(r, 20)); // dá tempo da 1a chamada criar a trava antes da 2a tentar
+  await new Promise((r) => setTimeout(r, 20));
   let erro2 = null;
   try { await pedido('gera algo demorado', 'req-concorrente'); } catch (e) { erro2 = e; }
-  confere('2a chamada concorrente recebe already-exists (não reprocessa em paralelo)', erro2 && erro2.code === 'already-exists', erro2 && erro2.message);
+  confere('2a chamada concorrente recebe already-exists', erro2 && erro2.code === 'already-exists', erro2 && erro2.message);
   liberar();
   const r1final = await p1;
   confere('1a chamada termina normalmente', r1final.text === 'Terminei.', r1final.text);
 
-  console.log('\n5) sem requestId nenhum, continua funcionando como sempre (sem trava)');
+  console.log('\n5) erro na 1a tentativa marca "failed" e NÃO trava o requestId pra sempre (achado do Codex)');
+  prepararEmpresa();
+  roteiro = [() => { throw new Error('Anthropic fora do ar'); }];
+  let erroPrimeira = null;
+  try { await pedido('oi', 'req-com-erro'); } catch (e) { erroPrimeira = e; }
+  confere('primeira tentativa realmente falhou', !!erroPrimeira);
+  confere('processamento marcado "failed"', processamento('req-com-erro').status === 'failed', processamento('req-com-erro'));
+  roteiro = [resp([txt('Segunda tentativa deu certo.')], 'end_turn')];
+  const r5 = await pedido('oi', 'req-com-erro');
+  confere('MESMO requestId consegue reprocessar depois do erro', r5.text === 'Segunda tentativa deu certo.', r5.text);
+
+  console.log('\n6) processamento "running" com lease expirado é reassumido (function caiu no meio)');
+  prepararEmpresa();
+  banco.set('assistenteIA_empresas/mv/processamentos/req-travado', { status: 'running', iniciadoEm: { toMillis: () => Date.now() - 400 * 1000 } });
+  roteiro = [resp([txt('Reassumiu depois do lease expirar.')], 'end_turn')];
+  const r6 = await pedido('oi', 'req-travado');
+  confere('reassume um processamento "running" com lease vencido', r6.text === 'Reassumiu depois do lease expirar.', r6.text);
+
+  console.log('\n7) sem requestId nenhum, continua funcionando como sempre (sem trava)');
   prepararEmpresa();
   roteiro = [resp([txt('Sem requestId, de boa.')], 'end_turn'), resp([txt('De novo, sem trava nenhuma.')], 'end_turn')];
-  const r5a = await pedido('oi');
-  const r5b = await pedido('oi de novo');
-  confere('duas chamadas sem requestId processam as duas', r5a.text === 'Sem requestId, de boa.' && r5b.text === 'De novo, sem trava nenhuma.');
+  const r7a = await pedido('oi');
+  const r7b = await pedido('oi de novo');
+  confere('duas chamadas sem requestId processam as duas', r7a.text === 'Sem requestId, de boa.' && r7b.text === 'De novo, sem trava nenhuma.');
 
   console.log(falhas === 0 ? '\nTUDO OK' : `\n${falhas} FALHA(S)`);
   process.exit(falhas === 0 ? 0 : 1);

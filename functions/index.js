@@ -938,36 +938,50 @@ exports.assistenteChat = onCall(
     }
 
     // Trava de idempotência: se o navegador chamar de novo com o MESMO requestId (retry depois
-    // de um timeout aparente — o front dá timeout aos 280s, esta function só aos 300s, e nesse
-    // intervalo o processamento original continua rodando e grava normalmente), a segunda
-    // chamada não reprocessa do zero (o que geraria um segundo arquivo/lançamento pro mesmo
-    // pedido) — devolve a resposta já gravada, ou (se a primeira ainda estiver em andamento)
-    // avisa que já está sendo processada. .create() falha se o documento já existir, o que dá
-    // a mesma garantia atômica tanto pra "já terminou" quanto pra "duas chamadas ao mesmo
-    // tempo" — sem precisar de transação.
+    // de um timeout aparente — o front dá timeout aos 280s, esta function só aos 300s — ou duas
+    // chamadas quase simultâneas), a segunda chamada não reprocessa do zero (o que geraria um
+    // segundo arquivo/lançamento pro mesmo pedido). O resultado fica guardado NESTE documento —
+    // não é mais buscado em "mensagens" por requestId: essa query não filtrava "role", e como a
+    // mensagem do USUÁRIO carrega o mesmo requestId (pra vincular pergunta↔resposta), a query
+    // podia achar a própria pergunta e devolvê-la como se fosse a resposta da IA. Usa transação
+    // (não só .create()) porque também precisa DESTRAVAR um processamento que falhou ou que
+    // ficou "running" além do prazo (function caiu no meio, por exemplo) — só .create() travaria
+    // esse requestId pra sempre nesses casos, sem nenhuma forma de reprocessar.
     const empresaRef = db.collection("assistenteIA_empresas").doc(empresaId);
-    if (requestId) {
-      try {
-        await empresaRef.collection("processamentos").doc(requestId).create({
-          iniciadoEm: FieldValue.serverTimestamp(),
-        });
-      } catch (err) {
-        if (err && (err.code === 6 || err.code === "already-exists")) {
-          const jaRespondida = await empresaRef
-            .collection("mensagens")
-            .where("requestId", "==", requestId)
-            .limit(1)
-            .get();
-          if (!jaRespondida.empty) {
-            const dados = jaRespondida.docs[0].data();
-            log("requestId repetido — devolvendo resposta já gravada");
-            return { text: dados.text, usage: null, arquivosGerados: dados.arquivosGerados || [] };
-          }
-          throw new HttpsError("already-exists", "Essa mensagem já está sendo processada — aguarde a resposta chegar no chat antes de tentar de novo.");
+    const processamentoRef = requestId ? empresaRef.collection("processamentos").doc(requestId) : null;
+    const LEASE_MS = 280 * 1000; // um pouco abaixo do timeout da function (300s)
+    if (processamentoRef) {
+      const reserva = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(processamentoRef);
+        if (!snap.exists) {
+          tx.set(processamentoRef, { status: "running", iniciadoEm: FieldValue.serverTimestamp() });
+          return { pode: true };
         }
-        throw err;
+        const dados = snap.data();
+        if (dados.status === "completed") return { pode: false, resultado: dados };
+        if (dados.status === "failed") {
+          tx.set(processamentoRef, { status: "running", iniciadoEm: FieldValue.serverTimestamp() });
+          return { pode: true };
+        }
+        // status "running": só reassume se o lease anterior já expirou (a chamada original
+        // provavelmente travou/caiu sem nunca terminar) — senão, é concorrência de verdade.
+        const iniciadoMs = dados.iniciadoEm && dados.iniciadoEm.toMillis ? dados.iniciadoEm.toMillis() : 0;
+        if (Date.now() - iniciadoMs > LEASE_MS) {
+          tx.set(processamentoRef, { status: "running", iniciadoEm: FieldValue.serverTimestamp() });
+          return { pode: true };
+        }
+        return { pode: false, aindaProcessando: true };
+      });
+      if (!reserva.pode) {
+        if (reserva.resultado) {
+          log("requestId repetido — devolvendo resposta já gravada");
+          return { text: reserva.resultado.text, usage: null, arquivosGerados: reserva.resultado.arquivosGerados || [] };
+        }
+        throw new HttpsError("already-exists", "Essa mensagem já está sendo processada — aguarde a resposta chegar no chat antes de tentar de novo.");
       }
     }
+
+    async function processarPedido() {
 
     // Histórico de relatórios já processados — vira contexto permanente da IA, independente
     // do tamanho do chat ou de quando o arquivo original foi enviado.
@@ -1555,6 +1569,32 @@ exports.assistenteChat = onCall(
     log("finalizado");
 
     return { text, usage: response.usage || null, arquivosGerados };
+    }
+
+    try {
+      const resultado = await processarPedido();
+      if (processamentoRef) {
+        await processamentoRef.set({
+          status: "completed",
+          text: resultado.text,
+          arquivosGerados: resultado.arquivosGerados,
+          concluidoEm: FieldValue.serverTimestamp(),
+        }, { merge: true });
+      }
+      return resultado;
+    } catch (err) {
+      // Marca como "failed" (não deixa o requestId travado pra sempre) e deixa o erro subir
+      // igual sempre subiu — quem trata isso do lado de fora (HttpsError -> resposta pro
+      // navegador) continua exatamente igual.
+      if (processamentoRef) {
+        await processamentoRef.set({
+          status: "failed",
+          erro: (err && err.message) || "erro desconhecido",
+          falhouEm: FieldValue.serverTimestamp(),
+        }, { merge: true }).catch(() => {});
+      }
+      throw err;
+    }
   }
 );
 

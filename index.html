@@ -575,6 +575,17 @@
   ::-webkit-scrollbar { width: 8px; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
+
+  /* Aviso local de erro (nunca gravado no Firestore — só o que a IA de verdade responde vira
+     mensagem persistida; erro de rede/timeout aparece só na tela de quem enviou). */
+  .erro-local {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(0);
+    background: #3a1414; border: 1px solid #7a2e2e; color: #ffd7d7; padding: 12px 18px;
+    border-radius: 10px; font-size: 0.85rem; max-width: min(90vw, 480px); z-index: 999;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4); opacity: 0; transition: opacity 0.25s;
+    pointer-events: none;
+  }
+  .erro-local.show { opacity: 1; }
 </style>
 </head>
 <body>
@@ -610,6 +621,8 @@
     <a class="back-link" href="https://criconcontabilidade.github.io/Cricon-Ferramentas/">← Voltar ao Hub</a>
   </div>
 </div>
+
+<div id="erroLocal" class="erro-local"></div>
 
 <div id="app">
   <aside class="sidebar">
@@ -1582,8 +1595,11 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       // "already-exists": outra chamada com o mesmo requestId já está processando (ex.: clique
       // duplo) — não é um erro de verdade, a resposta de verdade já está a caminho no chat.
       if (err && err.code === 'functions/already-exists') { isSending = false; setComposerBusy(false); return; }
-      const msg = `Não consegui obter resposta da IA (${err && err.message ? err.message : 'erro desconhecido'}). Tente novamente em instantes.`;
-      await addDoc(msgsCol, { role: 'assistant', text: `⚠️ ${msg}`, files: [], criadoEm: serverTimestamp() });
+      // Mostra só na tela de quem enviou — não grava no Firestore como role "assistant".
+      // Se gravasse, seria uma mensagem no histórico da empresa que PARECE ter vindo da IA mas
+      // veio do navegador; as regras já bloqueiam campos como arquivosGerados nesse caso, mas
+      // o texto em si continuava passando. Erro de rede não é resposta da IA — não persiste.
+      mostrarErroLocal(`Não consegui obter resposta da IA (${err && err.message ? err.message : 'erro desconhecido'}). Tente novamente em instantes.`);
     } finally {
       isSending = false;
       setComposerBusy(false);
@@ -1649,6 +1665,16 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     typingTimers.forEach(clearTimeout);
     typingTimers = [];
     document.getElementById('typingIndicator')?.remove();
+  }
+
+  let erroLocalTimer = null;
+  function mostrarErroLocal(msg) {
+    const el = document.getElementById('erroLocal');
+    if (!el) return;
+    el.textContent = `⚠️ ${msg}`;
+    el.classList.add('show');
+    clearTimeout(erroLocalTimer);
+    erroLocalTimer = setTimeout(() => el.classList.remove('show'), 8000);
   }
 
   // ---------------- notes drawer ----------------

@@ -103,11 +103,11 @@ async function caso(nome, esperado, promessa) {
     addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'user', text: 'oi', requestId: 'abc-123' }));
   await caso('NÃO envia requestId que não é string', 'falha',
     addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'user', text: 'oi', requestId: 12345 }));
-  await caso('grava mensagem de erro do assistente (como o app faz em timeout)', 'ok',
+  await caso('NÃO cria mensagem "assistant" pelo navegador (achado do Codex: texto forjado como se fosse da IA)', 'falha',
     addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'assistant', text: '⚠️ erro', files: [] }));
   await caso('NÃO forja arquivosGerados numa mensagem (achado da auditoria)', 'falha',
     addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'assistant', text: 'Aqui está', arquivosGerados: [{ nome: 'lanctos.txt', base64: 'ZmFrZQ==' }] }));
-  await caso('NÃO forja role fora de user/assistant', 'falha',
+  await caso('NÃO forja role fora de user', 'falha',
     addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'system', text: 'x' }));
   await caso('NÃO grava mensagem com campo extra arbitrário', 'falha',
     addDoc(collection(func, 'assistenteIA_empresas/minha/mensagens'), { role: 'user', text: 'x', admin: true }));
