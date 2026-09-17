@@ -212,6 +212,12 @@ async function xlsxBufferToText(buffer) {
 
 // ---------------- geração de arquivo de importação (Domínio) ----------------
 
+// Bem acima de qualquer lançamento real (nenhum cliente do escritório movimenta trilhões), só
+// pra pegar erro de leitura do relatório (ex.: dígitos concatenados por engano) ANTES de virar
+// notação científica no arquivo — acima de 1e21 (bem longe daqui) Number.toFixed/String do JS
+// passam a devolver "1e+21" em vez do número por extenso, e o Domínio não entende isso.
+const VALOR_MAXIMO_PLAUSIVEL = 1e13;
+
 // Mesma lógica de formatação de valor já usada nas outras ferramentas do Hub (ex. Bari):
 // inteiro sem casas decimais, senão duas casas com vírgula — nunca ponto.
 function fmtValorTxt(n) {
@@ -219,7 +225,17 @@ function fmtValorTxt(n) {
   if (typeof n !== "number" || !Number.isFinite(n)) {
     throw new Error(`Valor numérico inválido: ${String(n)}`);
   }
-  const r = Math.round(Number(n) * 100) / 100;
+  // Nenhum dos campos que passam por aqui (valor do lançamento, juros, multa, desconto,
+  // impostos, quantidade, valor unitário) tem sinal — negativo aqui é sempre erro de leitura ou
+  // de conta (ex.: usar valor negativo pra representar um desconto em vez do campo próprio),
+  // nunca um lançamento de verdade (achado do Codex: antes formatava e gravava "-5" quieto).
+  if (n < 0) {
+    throw new Error(`Valor não pode ser negativo (${n}) — se é uma dedução, use o campo próprio (ex.: desconto), não um número negativo`);
+  }
+  if (n > VALOR_MAXIMO_PLAUSIVEL) {
+    throw new Error(`Valor implausível (${n}) — parece erro de leitura do relatório`);
+  }
+  const r = Math.round(n * 100) / 100;
   if (r === 0) return "0";
   if (Number.isInteger(r)) return String(r);
   return r.toFixed(2).replace(".", ",");

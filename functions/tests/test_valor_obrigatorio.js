@@ -2,12 +2,12 @@
 // campos principais (valor do lançamento, valor da baixa, valor dos serviços da NFS).
 const fs = require('fs');
 const src = fs.readFileSync('C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js', 'utf8');
-const a = src.indexOf('function fmtValorTxt');
+const a = src.indexOf('const VALOR_MAXIMO_PLAUSIVEL');
 const b = src.indexOf('function documentoTxt');
 const m = { exports: {} };
 new Function('module', src.slice(a, b) +
   '\nmodule.exports={fmtValorTxt, fmtValorOpcionalTxt, valorObrigatorioTxt};')(m);
-const { valorObrigatorioTxt } = m.exports;
+const { fmtValorTxt, valorObrigatorioTxt } = m.exports;
 
 let falhas = 0;
 function confere(nome, obtido, esperado) {
@@ -55,6 +55,18 @@ confere('NFS sem valorServicos -> erro (não emite nota de R$0,00)', !!r.erro &&
 r = gera({ tipo: 'baixa_ent', linhas: [{ numero: '1', databaixa: '10/08/2026', valor: 100 }] });
 confere('baixa_ent SEM juros/multa/desconto continua ok (0 de propósito)', !!r.arq, true);
 if (r.erro) console.log('   (erro inesperado:', r.erro, ')');
+
+console.log('\nENDURECIMENTO DO fmtValorTxt (achado do Codex)');
+function testaValor(n) {
+  try { return { r: fmtValorTxt(n) }; }
+  catch (e) { return { erro: e.message }; }
+}
+confere('negativo dá erro, não formata quieto', !!testaValor(-5).erro && testaValor(-5).erro.includes('negativo'), true);
+confere('negativo pequeno (centavos) também dá erro', !!testaValor(-0.01).erro, true);
+confere('zero continua "0" (não é negativo)', testaValor(0), { r: '0' });
+confere('valor absurdamente grande dá erro em vez de notação científica', !!testaValor(1e21).erro && testaValor(1e21).erro.includes('implausível'), true);
+confere('valor grande mas plausível (milhões) continua ok', testaValor(1234567.89), { r: '1234567,89' });
+confere('nunca sai em notação científica pro Domínio', !/e[+-]/i.test(testaValor(1e21).r || ''), true);
 
 console.log(falhas === 0 ? '\nTUDO OK' : `\n${falhas} FALHA(S)`);
 process.exit(falhas === 0 ? 0 : 1);
