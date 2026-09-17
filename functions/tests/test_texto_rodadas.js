@@ -12,7 +12,10 @@ const fakeDb = { collection: (n) => colRef(n) };
 
 let roteiro = [];
 class FakeAnthropic {
-  constructor() { this.messages = { create: async (params) => { const p = roteiro.shift(); if (!p) throw new Error('roteiro acabou'); return typeof p === 'function' ? p(params) : p; } }; }
+  constructor() {
+    const create = async (params) => { const p = roteiro.shift(); if (!p) throw new Error('roteiro acabou'); return typeof p === 'function' ? p(params) : p; };
+    this.messages = { create, stream: (params) => ({ finalMessage: () => create(params) }) };
+  }
 }
 const txt = (t) => ({ type: 'text', text: t });
 let idSeq = 0;

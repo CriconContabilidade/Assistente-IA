@@ -46,7 +46,10 @@ const fakeDb = {
 let roteiro = [];
 let chamadasIA = 0;
 class FakeAnthropic {
-  constructor() { this.messages = { create: async (params) => { chamadasIA++; const p = roteiro.shift(); if (!p) throw new Error('roteiro acabou'); return typeof p === 'function' ? p(params) : p; } }; }
+  constructor() {
+    const create = async (params) => { chamadasIA++; const p = roteiro.shift(); if (!p) throw new Error('roteiro acabou'); return typeof p === 'function' ? p(params) : p; };
+    this.messages = { create, stream: (params) => ({ finalMessage: () => create(params) }) };
+  }
 }
 const txt = (t) => ({ type: 'text', text: t });
 const resp = (content, stop_reason) => ({ content, stop_reason, usage: { input_tokens: 10, output_tokens: 5 } });

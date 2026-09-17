@@ -1188,7 +1188,12 @@ exports.assistenteChat = onCall(
     // motivo. Só vale antes de qualquer ferramenta ter sido usada nesta conversa.
     let ferramentasAtivas = true;
     async function chamarIA() {
-      const pedir = () => anthropic.messages.create({
+      // Streaming (não .create()) porque max_tokens é alto o bastante que o SDK recusa de cara
+      // ("Streaming is required for operations that may take longer than 10 minutes") — visto em
+      // produção assim que max_tokens subiu de 16000 pra 64000 (ver comentário abaixo). Não
+      // processa os eventos um a um porque não precisa: .finalMessage() entrega a mensagem
+      // completa acumulada, no mesmo formato que .create() sempre devolveu.
+      const pedir = () => anthropic.messages.stream({
         model: MODEL,
         // Sonnet 5 aceita até 128K de saída na API síncrona sem precisar de beta header. 16000
         // era baixo demais pra um relatório com muitas linhas (ex.: extrato com ~80
@@ -1200,7 +1205,7 @@ exports.assistenteChat = onCall(
         system: systemPrompt,
         ...(ferramentasAtivas ? { tools: FERRAMENTAS } : {}),
         messages,
-      });
+      }).finalMessage();
       try {
         return await pedir();
       } catch (err) {
@@ -5015,13 +5020,18 @@ exports.migrarPadroesEstruturados = onCall(
       const padroesDaEmpresa = PADROES_ESTRUTURADOS[emp.nome];
       if (!padroesDaEmpresa) continue;
 
-      const jaTinha = await doc.ref.collection("padroes").limit(1).get();
+      // ID determinístico por posição (não mais .add() com ID aleatório) + checagem POR padrão
+      // em vez de "algum já existe -> pula a empresa inteira": se a function cair no meio da
+      // migração de uma empresa (timeout, deploy no meio, etc.), rodar de novo completa
+      // exatamente os padrões que faltaram em vez de deixar a empresa pra sempre com só uma
+      // parte migrada sem ninguém perceber (achado do Codex — risco de conclusão parcial).
       let gravados = 0;
-      if (jaTinha.empty) {
-        for (const p of padroesDaEmpresa) {
-          await doc.ref.collection("padroes").add({ ...p, criadoEm: FieldValue.serverTimestamp() });
-          gravados++;
-        }
+      for (let i = 0; i < padroesDaEmpresa.length; i++) {
+        const ref = doc.ref.collection("padroes").doc(`migrado-${i}`);
+        const jaTinha = await ref.get();
+        if (jaTinha.exists) continue;
+        await ref.set({ ...padroesDaEmpresa[i], criadoEm: FieldValue.serverTimestamp() });
+        gravados++;
       }
 
       const notasAtuais = Array.isArray(emp.notas) ? emp.notas : [];

@@ -53,14 +53,13 @@ let roteiro = [];
 const chamadas = [];
 class FakeAnthropic {
   constructor() {
-    this.messages = {
-      create: async (params) => {
-        chamadas.push(JSON.parse(JSON.stringify(params)));
-        const passo = roteiro.shift();
-        if (!passo) throw new Error('roteiro acabou');
-        return typeof passo === 'function' ? passo(params) : passo;
-      },
+    const create = async (params) => {
+      chamadas.push(JSON.parse(JSON.stringify(params)));
+      const passo = roteiro.shift();
+      if (!passo) throw new Error('roteiro acabou');
+      return typeof passo === 'function' ? passo(params) : passo;
     };
+    this.messages = { create, stream: (params) => ({ finalMessage: () => create(params) }) };
   }
 }
 FakeAnthropic.BadRequestError = class BadRequestError extends Error {};
