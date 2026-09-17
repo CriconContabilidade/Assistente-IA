@@ -590,8 +590,62 @@ const FERRAMENTAS = [
         },
         linhas: {
           type: "array",
-          description: "Uma entrada por linha do arquivo (pelo menos uma), com os campos do tipo escolhido. Valores como número puro (8.44), datas em DD/MM/AAAA.",
-          items: { type: "object" },
+          description: "Uma entrada por linha do arquivo (pelo menos uma), com os campos do tipo escolhido (nem todo campo listado se aplica a todo tipo — veja a seção de importações do prompt de sistema pra saber quais valem pra cada um). Valores como número puro (8.44), datas em DD/MM/AAAA.",
+          items: {
+            type: "object",
+            properties: {
+              // lanctos
+              data: { type: "string" },
+              debito: { type: "string" },
+              credito: { type: "string" },
+              valor: { type: "number" },
+              codHist: { type: "string" },
+              complemento: { type: "string" },
+              iniciaLote: { type: "string" },
+              codigoEmp: { type: "string" },
+              centroCustoDebito: { type: "string" },
+              centroCustoCredito: { type: "string" },
+              // baixa_ent / baixa_sai / baixa_ser
+              numero: { type: "string" },
+              cnpj: { type: "string" },
+              vencimento: { type: "string" },
+              databaixa: { type: "string" },
+              juros: { type: "number" },
+              multa: { type: "number" },
+              desconto: { type: "number" },
+              pis: { type: "number" },
+              cofins: { type: "number" },
+              csll: { type: "number" },
+              irrf: { type: "number" },
+              // servico_prest
+              razaoSocial: { type: "string" },
+              uf: { type: "string" },
+              municipio: { type: "string" },
+              endereco: { type: "string" },
+              numeroDocumento: { type: "string" },
+              serie: { type: "string" },
+              situacao: { type: ["string", "integer"] },
+              acumulador: { type: ["string", "integer"] },
+              cfps: { type: ["string", "integer"] },
+              valorServicos: { type: "number" },
+              valorDescontos: { type: "number" },
+              valorDeducao: { type: "number" },
+              valorContabil: { type: "number" },
+              baseCalculo: { type: "number" },
+              aliquotaIss: { type: "number" },
+              valorIssNormal: { type: "number" },
+              valorIssRetido: { type: "number" },
+              valorIrrf: { type: "number" },
+              valorPis: { type: "number" },
+              valorCofins: { type: "number" },
+              valorCsll: { type: "number" },
+              valorCrf: { type: "number" },
+              valorInss: { type: "number" },
+              codigoItem: { type: "string" },
+              quantidade: { type: "number" },
+              valorUnitario: { type: "number" },
+            },
+          },
         },
       },
       required: ["tipo", "linhas"],
@@ -1136,7 +1190,13 @@ exports.assistenteChat = onCall(
     async function chamarIA() {
       const pedir = () => anthropic.messages.create({
         model: MODEL,
-        max_tokens: 16000,
+        // Sonnet 5 aceita até 128K de saída na API síncrona sem precisar de beta header. 16000
+        // era baixo demais pra um relatório com muitas linhas (ex.: extrato com ~80
+        // lançamentos): o modelo gastava o orçamento inteiro categorizando cada um e nem sobrava
+        // espaço pra terminar com texto ou fechar o tool_use — a conversa voltava com o aviso de
+        // "relatório grande demais" mesmo em casos que cabiam perfeitamente, só precisando de
+        // mais espaço de saída.
+        max_tokens: 64000,
         system: systemPrompt,
         ...(ferramentasAtivas ? { tools: FERRAMENTAS } : {}),
         messages,
