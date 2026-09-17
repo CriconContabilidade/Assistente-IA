@@ -42,6 +42,20 @@ confere('letra colada em CPF valido -> erro, NAO virou CPF de outra pessoa',
 confere('letra colada, so 11 chars ao todo -> erro claro, nao vira CPF por acaso',
   !!doc('AB998224725').erro, true);
 
+console.log('\nCNPJ ALFANUMERICO COM SEPARADOR ENTRE LETRA E DIGITO (achado do Codex)');
+// Antes, um traço ou espaço OCR entre o bloco de letras e o bloco numérico escapava da detecção
+// (só pegava letra colada DIRETO no dígito) e o CNPJ alfanumérico virava silenciosamente
+// "52998224725" — por coincidência, um CPF válido de outra pessoa. Agora tem que continuar
+// alfanumérico dos dois jeitos.
+confere('"ABC-52998224725" (traço) normaliza pro alfanumerico completo',
+  normalizarDocumento('ABC-52998224725'), 'ABC52998224725');
+confere('"ABC 52998224725" (espaço) normaliza pro alfanumerico completo',
+  normalizarDocumento('ABC 52998224725'), 'ABC52998224725');
+confere('"ABC-52998224725" -> erro de DV, NAO vira CPF de outra pessoa',
+  doc('ABC-52998224725').erro && doc('ABC-52998224725').erro.includes('dígito verificador não confere'), true);
+confere('"ABC 52998224725" -> erro de DV, NAO vira CPF de outra pessoa',
+  doc('ABC 52998224725').erro && doc('ABC 52998224725').erro.includes('dígito verificador não confere'), true);
+
 console.log('\nCOMPARACAO COM O COMPORTAMENTO ANTIGO (qualquer entrada so com numeros)');
 const antigo = (v) => String(v ?? '').replace(/\D/g, '');
 let diferentes = 0;

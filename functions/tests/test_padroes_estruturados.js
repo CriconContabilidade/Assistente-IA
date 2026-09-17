@@ -185,6 +185,79 @@ const padroesSalvos = () => [...banco.entries()].filter(([k]) => k.includes('/pa
   ];
   await pedido('distribuição de lucros');
 
+  console.log('\n10) padrão CONTRADITÓRIO com condicaoValor também é bloqueado (achado do Codex)');
+  // Antes, salvar com condicaoValor pulava a checagem de conflito por completo — dava pra
+  // salvar duas regras diferentes pra mesma chave+valor sem aviso nenhum.
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('salvar_padrao', { palavrasChave: ['ALUGUEL LOJA'], condicaoValor: 500, debito: '10', credito: '58' })], 'tool_use'),
+    (params) => {
+      const r = params.messages[params.messages.length - 1].content[0];
+      confere('primeiro salva sem erro', !r.is_error, r.content);
+      return resp([uso('salvar_padrao', { palavrasChave: ['ALUGUEL LOJA'], condicaoValor: 500, ignorar: true })], 'tool_use');
+    },
+    (params) => {
+      const r = params.messages[params.messages.length - 1].content[0];
+      confere('mesma chave + mesmo valor com tratamento diferente -> recusa', r.is_error && r.content.includes('tratamento diferente'), r.content);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('aluguel condicionado, depois contraditório');
+  confere('continua só 1 padrão salvo pra essa chave', padroesSalvos().filter(p => p.palavrasChave.includes('ALUGUEL LOJA')).length === 1);
+
+  console.log('\n11) mesma chave com acento/maiúscula diferente é reconhecida como conflito (achado do Codex)');
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('salvar_padrao', { palavrasChave: ['Sódio'], debito: '10', credito: '58' })], 'tool_use'),
+    (params) => {
+      const r = params.messages[params.messages.length - 1].content[0];
+      confere('primeiro salva sem erro', !r.is_error, r.content);
+      return resp([uso('salvar_padrao', { palavrasChave: ['SODIO'], ignorar: true })], 'tool_use');
+    },
+    (params) => {
+      const r = params.messages[params.messages.length - 1].content[0];
+      confere('"SODIO" sem acento é reconhecida como a mesma chave de "Sódio" -> recusa', r.is_error && r.content.includes('tratamento diferente'), r.content);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('sodio com e sem acento');
+
+  console.log('\n12) mesmo débito/crédito mas histórico diferente NÃO é "mesmo tratamento" (achado do Codex)');
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('salvar_padrao', { palavrasChave: ['MANUTENCAO'], debito: '10', credito: '58', historico: 'MANUTENCAO PREDIAL' })], 'tool_use'),
+    (params) => {
+      const r = params.messages[params.messages.length - 1].content[0];
+      confere('primeiro salva sem erro', !r.is_error, r.content);
+      return resp([uso('salvar_padrao', { palavrasChave: ['MANUTENCAO'], debito: '10', credito: '58', historico: 'MANUTENCAO DE VEICULO' })], 'tool_use');
+    },
+    (params) => {
+      const r = params.messages[params.messages.length - 1].content[0];
+      confere('mesmo débito/crédito mas histórico diferente -> recusa (antes passava despercebido)', r.is_error && r.content.includes('tratamento diferente'), r.content);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('manutencao com historicos diferentes');
+  confere('continua só 1 padrão salvo pra essa chave', padroesSalvos().filter(p => p.palavrasChave.includes('MANUTENCAO')).length === 1);
+
+  console.log('\n13) salvar o MESMO padrão de novo não duplica (achado do Codex)');
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('salvar_padrao', { palavrasChave: ['ENERGIA'], debito: '10', credito: '58', historico: 'CONTA DE LUZ' })], 'tool_use'),
+    (params) => {
+      const r = params.messages[params.messages.length - 1].content[0];
+      confere('primeiro salva sem erro', !r.is_error, r.content);
+      return resp([uso('salvar_padrao', { palavrasChave: ['ENERGIA'], debito: '10', credito: '58', historico: 'CONTA DE LUZ' })], 'tool_use');
+    },
+    (params) => {
+      const r = params.messages[params.messages.length - 1].content[0];
+      confere('salvar de novo, idêntico, não dá erro', !r.is_error, r.content);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('energia salva duas vezes igual');
+  confere('não duplicou — continua só 1 documento pra essa chave', padroesSalvos().filter(p => p.palavrasChave.includes('ENERGIA')).length === 1, padroesSalvos().length);
+
   console.log(falhas === 0 ? '\nTUDO OK' : `\n${falhas} FALHA(S)`);
   process.exit(falhas === 0 ? 0 : 1);
 })().catch((e) => { console.error(e); process.exit(1); });

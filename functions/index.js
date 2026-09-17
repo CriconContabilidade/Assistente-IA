@@ -324,33 +324,44 @@ function validarCnpjCpfDv(digits) {
   return false;
 }
 
-// Uma letra colada direto num dígito, sem nada entre os dois (nem espaço, nem pontuação), só
-// acontece de propósito dentro de um CNPJ alfanumérico de verdade (ex.: o "01DE" no meio de
-// "12.ABC.345/01DE-35"). Um rótulo escrito por humano ("CPF 529...", "CNPJ: 43.617...", "Doc
-// nº 123...") sempre tem a palavra separada do número por espaço ou dois-pontos — nunca letra
-// grudada em dígito. É essa a distinção usada abaixo, não "tem letra ou não".
-function temLetraColadaEmDigito(texto) {
-  for (let i = 0; i < texto.length - 1; i++) {
-    const a = texto[i], b = texto[i + 1];
-    if ((/[A-Za-z]/.test(a) && /[0-9]/.test(b)) || (/[0-9]/.test(a) && /[A-Za-z]/.test(b))) return true;
+// Rótulos reais que aparecem escritos antes de um número de documento — nunca fazem parte do
+// CNPJ alfanumérico em si, então uma letra pura seguida de dígitos aqui é sempre "rótulo + valor
+// separados", não CNPJ. Qualquer OUTRA palavra de letras coladas ou separada por espaço de um
+// bloco numérico é tratada como parte do próprio CNPJ alfanumérico (ex.: "01DE" em
+// "12.ABC.345/01DE-35", ou o "ABC" separado por espaço/traço de OCR em "ABC 52998224725" /
+// "ABC-52998224725").
+const ROTULOS_DOCUMENTO = new Set(["CPF", "CNPJ", "DOC", "DOCUMENTO", "N", "NO", "ISENTO", "ISENTA"]);
+
+// Quebra o texto em blocos separados por espaço e tira a máscara (pontos, barra, traço, etc.)
+// de dentro de cada bloco — assim "529.982.247-25" vira um único bloco "52998224725", e
+// "01DE-35" (dentro de um CNPJ alfanumérico já colado) vira "01DE35".
+function blocosDocumento(texto) {
+  return texto.split(/\s+/).filter(Boolean).map((b) => b.toUpperCase().replace(/[^0-9A-Z]/g, "")).filter(Boolean);
+}
+
+// Só trata como possível CNPJ alfanumérico (mantém letras, sem cair no fallback de só dígitos)
+// quando: (a) um mesmo bloco tem letra E dígito juntos (letra colada em dígito, com ou sem
+// máscara no meio), ou (b) um bloco só de letras vem logo antes de um bloco só de dígitos e essa
+// palavra NÃO é um rótulo conhecido (CPF, CNPJ, Doc, Nº, Isento...). Rótulo solto continua
+// virando só dígitos, exatamente como sempre foi. Antes, um separador (espaço ou traço) entre a
+// letra e o dígito escapava da detecção e o CNPJ alfanumérico virava silenciosamente um número
+// errado (por coincidência, às vezes o CPF válido de OUTRA pessoa) sem aviso nenhum.
+function candidatoCnpjAlfanumerico(texto) {
+  const blocos = blocosDocumento(texto);
+  for (const b of blocos) {
+    if (/[A-Z]/.test(b) && /[0-9]/.test(b)) return true;
+  }
+  for (let i = 0; i < blocos.length - 1; i++) {
+    if (/^[A-Z]+$/.test(blocos[i]) && /^[0-9]+$/.test(blocos[i + 1]) && !ROTULOS_DOCUMENTO.has(blocos[i])) return true;
   }
   return false;
 }
 
 // Em branco é válido quando o campo não é obrigatório: nas baixas o título já é identificado
 // pelo número, e é comum o CNPJ vir vazio. Se vier preenchido, aí sim tem que estar certo.
-// Deixa o CNPJ/CPF só com o que importa. Só trata como possível CNPJ alfanumérico (retorna com
-// letra e tudo, sem cair no fallback de só dígitos) quando há letra colada em dígito — rótulo
-// solto ("CPF 529...", "ISENTO") continua virando só dígitos, exatamente como sempre foi.
-// Antes, QUALQUER letra sobrando (rótulo ou não) caía direto pro fallback de só dígitos: um
-// CNPJ alfanumérico digitado errado por OCR (ex. "ABC52998224725") virava silenciosamente
-// "52998224725", que por coincidência pode ser o CPF válido de OUTRA pessoa — sem aviso nenhum,
-// o sistema consultava/gravava o documento errado. Agora documentoTxt() dá erro explícito nesse
-// caso, sem afetar nenhum rótulo real usado no dia a dia.
 function normalizarDocumento(valor) {
   const texto = String(valor ?? "");
-  const alfanumerico = texto.toUpperCase().replace(/[^0-9A-Z]/g, "");
-  if (/[A-Z]/.test(alfanumerico) && temLetraColadaEmDigito(texto)) return alfanumerico;
+  if (candidatoCnpjAlfanumerico(texto)) return blocosDocumento(texto).join("");
   return texto.replace(/\D/g, "");
 }
 
@@ -1239,42 +1250,67 @@ exports.assistenteChat = onCall(
       if (!spec.ignorar && !spec.debito && !spec.credito) {
         throw new Error("informe débito e/ou crédito, ou marque ignorar=true");
       }
+      const chavesNovasNorm = palavrasChave.map((c) => stripAccentsJs(String(c)).toUpperCase());
+      const condicaoValorNova = spec.condicaoValor != null ? Number(spec.condicaoValor) : null;
+      const provisaoNova = spec.provisao && (spec.provisao.debito || spec.provisao.credito)
+        ? {
+            debito: spec.provisao.debito || null,
+            credito: spec.provisao.credito || null,
+            historico: spec.provisao.historico || null,
+            codigoHistorico: spec.provisao.codigoHistorico || null,
+          }
+        : null;
       const existentes = await carregarPadroes();
       let completarId = null;
-      if (spec.condicaoValor == null) {
-        for (const existente of existentes) {
-          if (existente.condicaoValor != null) continue;
-          const chaveConflito = (existente.palavrasChave || []).find((c) => palavrasChave.includes(c));
-          if (!chaveConflito) continue;
-          // Padrão migrado incompleto (histórico dinâmico da ferramenta antiga, nunca
-          // confirmado) — completar com os dados de agora é o objetivo, não um conflito.
-          if (existente.pendenteRevisao) { completarId = existente.id; continue; }
-          const mesmoTratamento = (existente.debito || null) === (spec.debito || null)
-            && (existente.credito || null) === (spec.credito || null)
-            && !!existente.ignorar === !!spec.ignorar;
-          if (!mesmoTratamento) {
-            throw new Error(`já existe um padrão pra "${chaveConflito}" com tratamento diferente (${formatarPadrao(existente)}) — se são casos diferentes (ex.: mesmo texto, valores diferentes), adicione "condicaoValor" nos dois; se é a mesma regra, não precisa salvar de novo`);
-          }
+      for (const existente of existentes) {
+        // Só compara com padrões que disputariam a MESMA descrição na consulta: as duas sem
+        // condicaoValor, ou as duas com o mesmo valor — condição de valor diferente não é
+        // conflito nenhum, é exatamente pra separar os dois casos (item 6 dos testes). Antes,
+        // qualquer padrão COM condicaoValor pulava a checagem inteira, então dava pra salvar a
+        // mesma chave+valor duas vezes com tratamento diferente sem aviso nenhum.
+        const condicaoExistente = existente.condicaoValor != null ? Number(existente.condicaoValor) : null;
+        const mesmaCondicao = condicaoValorNova == null
+          ? condicaoExistente == null
+          : condicaoExistente != null && Math.abs(condicaoExistente - condicaoValorNova) < 0.01;
+        if (!mesmaCondicao) continue;
+        // Normaliza os dois lados do jeito que consultarPadrao/bateChave normaliza pra comparar
+        // — sem isso, "Sódio" salvo antes e "SODIO" salvo agora pareciam chaves diferentes aqui
+        // mas batiam na mesma descrição na hora de consultar (achado do Codex).
+        const chaveConflito = (existente.palavrasChave || []).find(
+          (c) => chavesNovasNorm.includes(stripAccentsJs(String(c)).toUpperCase())
+        );
+        if (!chaveConflito) continue;
+        // Padrão migrado incompleto (histórico dinâmico da ferramenta antiga, nunca
+        // confirmado) — completar com os dados de agora é o objetivo, não um conflito.
+        if (existente.pendenteRevisao) { completarId = existente.id; continue; }
+        // Compara TODO campo que muda o que vai pro Domínio — antes só comparava débito/crédito/
+        // ignorar, então dois padrões com o mesmo débito/crédito mas histórico ou período
+        // diferentes passavam como "mesmo tratamento" sem avisar (achado do Codex).
+        const mesmoTratamento = (existente.debito || null) === (spec.debito || null)
+          && (existente.credito || null) === (spec.credito || null)
+          && !!existente.ignorar === !!spec.ignorar
+          && (existente.historico || null) === (spec.historico || null)
+          && (existente.codigoHistorico || null) === (spec.codigoHistorico || null)
+          && (existente.periodo || null) === (spec.periodo || null)
+          && JSON.stringify(existente.provisao || null) === JSON.stringify(provisaoNova);
+        if (!mesmoTratamento) {
+          throw new Error(`já existe um padrão pra "${chaveConflito}" com tratamento diferente (${formatarPadrao(existente)}) — se são casos diferentes (ex.: mesmo texto, valores diferentes), adicione "condicaoValor" nos dois; se é a mesma regra, não precisa salvar de novo`);
         }
+        // Idêntico ao que já existe: reaproveita o doc em vez de duplicar (achado do Codex —
+        // salvar o mesmo padrão de novo criava uma segunda linha igual à primeira).
+        completarId = existente.id;
       }
       const doc = {
         palavrasChave,
         ehRegex: false,
-        condicaoValor: spec.condicaoValor != null ? Number(spec.condicaoValor) : null,
+        condicaoValor: condicaoValorNova,
         ignorar: !!spec.ignorar,
         debito: spec.debito || null,
         credito: spec.credito || null,
         codigoHistorico: spec.codigoHistorico || null,
         historico: spec.historico || null,
         periodo: spec.periodo || null,
-        provisao: spec.provisao && (spec.provisao.debito || spec.provisao.credito)
-          ? {
-              debito: spec.provisao.debito || null,
-              credito: spec.provisao.credito || null,
-              historico: spec.provisao.historico || null,
-              codigoHistorico: spec.provisao.codigoHistorico || null,
-            }
-          : null,
+        provisao: provisaoNova,
         pendenteRevisao: false,
         criadoEm: FieldValue.serverTimestamp(),
       };
