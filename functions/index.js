@@ -274,9 +274,15 @@ function campoTxt(valor, nome, obrigatorio = false) {
 // problema: um ";" nesses campos é sinal de dado corrompido (ex. dois códigos concatenados por
 // engano), e trocar por " - " silenciosamente gravaria um valor sem sentido na coluna, sem
 // avisar ninguém. campoTxt() continua certo pra texto livre (histórico, razão social, etc.),
-// onde ";" trocado por "-" é comportamento esperado, não um erro escondido.
+// onde ";" trocado por "-" é comportamento esperado, não um erro escondido. Pelo mesmo motivo,
+// quebra de linha e qualquer outro caractere de controle também são erro aqui, não viram espaço
+// escondido como em campoTxt — um código de conta com \r\n no meio (dado corrompido) não pode
+// simplesmente "colar" com o que vem na sequência sem ninguém perceber (achado do Codex).
 function campoEstruturalTxt(valor, nome, obrigatorio = false) {
-  const texto = String(valor ?? "").trim().replace(/[\r\n]+/g, " ");
+  const texto = String(valor ?? "").trim();
+  if (/[\x00-\x1f\x7f]/.test(texto)) {
+    throw new Error(`${nome} não pode conter quebra de linha ou caractere de controle (valor recebido: ${JSON.stringify(texto)}) — parece dado corrompido`);
+  }
   if (texto.includes(";")) {
     throw new Error(`${nome} não pode conter ";" (valor recebido: "${texto}") — parece dado corrompido`);
   }
@@ -418,12 +424,24 @@ function stripAccentsJs(s) {
 }
 
 // O Domínio importa em ANSI/Latin-1 — cada caractere fora do intervalo vira "?", igual ao
-// downloadTextAnsi() já usado nas outras ferramentas do Hub.
-function toLatin1Base64(str) {
+// downloadTextAnsi() já usado nas outras ferramentas do Hub. Quando isso acontece de verdade
+// (símbolo, emoji, letra de outro alfabeto que stripAccentsJs não cobre), quem confere o arquivo
+// merece saber — sem aviso, um "?" no meio do histórico parece corrupção aleatória, não um
+// caractere específico que precisa de atenção (achado do Codex).
+function toLatin1Base64(str, avisos) {
   const bytes = Buffer.alloc(str.length);
+  const substituidos = new Set();
   for (let i = 0; i < str.length; i++) {
     const code = str.charCodeAt(i);
-    bytes[i] = code <= 0xff ? code : 0x3f;
+    if (code <= 0xff) {
+      bytes[i] = code;
+    } else {
+      bytes[i] = 0x3f;
+      substituidos.add(str[i]);
+    }
+  }
+  if (avisos && substituidos.size > 0) {
+    avisos.push(`Caractere(s) fora do padrão ANSI/Latin-1 virou(ram) "?" no arquivo: ${[...substituidos].join(" ")} — confira se não era acento ou símbolo importante.`);
   }
   return bytes.toString("base64");
 }
@@ -738,7 +756,7 @@ function buildArquivoGerado(spec) {
   const content = lines.join("\r\n") + "\r\n";
   return {
     nome: nomeArquivo,
-    base64: toLatin1Base64(content),
+    base64: toLatin1Base64(content, avisos),
     linhas: spec.linhas.length,
     tipo: spec.tipo,
     titulo: TITULOS_ARQUIVO[spec.tipo] || spec.tipo,
