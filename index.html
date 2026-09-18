@@ -451,18 +451,10 @@
   .conferencia tr:last-child td { border-bottom: none; }
   .conferencia-num { color: var(--text-faint); text-align: right; }
 
-  .typing { display: flex; gap: 4px; padding: 4px 0; }
-  .typing span {
-    width: 6px; height: 6px; border-radius: 50%; background: var(--accent2);
-    animation: typingBounce 1.2s infinite ease-in-out;
-  }
-  .typing span:nth-child(2) { animation-delay: .15s; }
-  .typing span:nth-child(3) { animation-delay: .3s; }
-  @keyframes typingBounce { 0%, 60%, 100% { transform: translateY(0); opacity: .5; } 30% { transform: translateY(-4px); opacity: 1; } }
   .typing-label { font-size: 0.78rem; color: var(--text-dim); margin-top: 2px; }
   /* barrinha dourada (cor da logo) enquanto a IA está processando — não é percentual real (a
      resposta só chega inteira no fim, não dá pra medir progresso de verdade), só indica "ainda
-     trabalhando nisso" de um jeito visual mais vivo que os três pontinhos sozinhos. */
+     trabalhando nisso". */
   .typing-progress { width: 100%; height: 3px; border-radius: 999px; overflow: hidden; background: rgba(242,193,78,0.15); margin-top: 8px; }
   .typing-progress::after {
     content: ''; display: block; height: 100%; width: 40%; border-radius: 999px;
