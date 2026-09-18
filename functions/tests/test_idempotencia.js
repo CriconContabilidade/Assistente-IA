@@ -154,6 +154,10 @@ const processamento = (id) => banco.get(`assistenteIA_empresas/mv/processamentos
   confere('documento compartilhado continua com o resultado da 2a tentativa (não foi sobrescrito)',
     processamento('req-fence').text === 'Terminei rápido.', processamento('req-fence'));
   confere('attemptId no documento não voltou a mudar', processamento('req-fence').attemptId === attemptIdDepoisDaRapida);
+  const mensagensDoFence = [...banco.entries()].filter(([k]) => k.startsWith('assistenteIA_empresas/mv/mensagens/') && k.includes('req-fence'));
+  confere('só existe UMA mensagem do assistente pra essa troca (não duplicou na tela)', mensagensDoFence.length === 1, mensagensDoFence.map(([k]) => k));
+  confere('a mensagem gravada é a da tentativa que ganhou (rápida), não a que perdeu (lenta)',
+    mensagensDoFence[0] && mensagensDoFence[0][1].text === 'Terminei rápido.', mensagensDoFence[0] && mensagensDoFence[0][1]);
 
   console.log('\n5) erro na 1a tentativa marca "failed" e NÃO trava o requestId pra sempre (achado do Codex)');
   prepararEmpresa();

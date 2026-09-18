@@ -2275,6 +2275,12 @@ cadWireDropzone('cadPdfDrop', 'cadPdfFile', async (f, d) => {
     }
     if (!parsed.length) throw new Error("Não consegui reconhecer nenhum registro nesse PDF.");
     if (!empresaCnpj) throw new Error("Não achei o CNPJ da empresa no cabeçalho do PDF — informe o CNPJ da empresa no campo acima antes de importar.");
+    // Um CNPJ digitado errado/incompleto (ex. "123") não pode virar chave de vínculo — geraria
+    // "123_fornecedor" e vincularia centenas de registros à empresa errada, sem erro nenhum
+    // (achado do Codex).
+    if (empresaCnpj.length !== 11 && empresaCnpj.length !== 14) {
+      throw new Error(`CNPJ da empresa (${empresaCnpj}) inválido — confira se está completo (14 dígitos de CNPJ ou 11 de CPF).`);
+    }
 
     let addedCli = 0, updatedCod = 0;
     const dirty = {};
@@ -2298,7 +2304,11 @@ cadWireDropzone('cadPdfDrop', 'cadPdfFile', async (f, d) => {
     // só da leitura do PDF, e uma gravação que falhasse em silêncio (ex.: login com a nuvem
     // ainda não tinha terminado) parecia ter dado certo sem nunca ter salvo nada.
     status.textContent = 'PDF lido, salvando no cadastro compartilhado...';
-    if (window.cadastroCloud) await window.cadastroCloud.pushManyClientes(dirty);
+    // window.cadastroCloud ausente (o módulo Firebase secundário não carregou — CDN falhou,
+    // script ainda não terminou de rodar) precisa dar erro, não pular a gravação em silêncio
+    // e anunciar sucesso mesmo assim (achado do Codex).
+    if (!window.cadastroCloud) throw new Error('a conexão com o cadastro compartilhado ainda não carregou — espere alguns segundos e tente de novo.');
+    await window.cadastroCloud.pushManyClientes(dirty);
     status.className = 'cad-status ok';
     status.textContent = `Cadastro atualizado: ${addedCli} registro(s) novo(s), ${updatedCod} código(s) vinculado(s) (${tipoTitulo}).`;
     cadMarkDropDone(d, `${parsed.length} registros lidos`);
@@ -2329,7 +2339,8 @@ cadWireDropzone('cadEmpresasPdfDrop', 'cadEmpresasPdfFile', async (f, d) => {
       dirty[p.documento] = window.cadEmpresasDB[p.documento];
     });
     status.textContent = 'PDF lido, salvando no cadastro compartilhado...';
-    if (window.cadastroCloud) await window.cadastroCloud.pushManyEmpresas(dirty);
+    if (!window.cadastroCloud) throw new Error('a conexão com o cadastro compartilhado ainda não carregou — espere alguns segundos e tente de novo.');
+    await window.cadastroCloud.pushManyEmpresas(dirty);
     status.className = 'cad-status ok';
     status.textContent = `Cadastro de empresas atualizado: ${added} nova(s), ${updated} atualizada(s).`;
     cadMarkDropDone(d, `${parsed.length} empresas lidas`);

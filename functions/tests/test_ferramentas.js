@@ -90,13 +90,16 @@ const falsos = {
     // variável global compartilhada quebraria sob concorrência real, mesmo o código de
     // produção estando correto (o SDK de verdade do Firestore não tem esse problema).
     doc: (_db, _col, id) => ({ id }),
-    getDoc: async (ref) => ({ exists: () => ref.id === '43617343000102', data: () => ({}) }),
+    getDoc: async (ref) => {
+      if (cibeleIndisponivel) throw new Error('cadastro compartilhado fora do ar (simulado)');
+      return { exists: () => ref.id === '43617343000102', data: () => ({}) };
+    },
     // clientesCompartilhados simula a coleção inteira "clientes" (usada pelo fallback de
     // busca por nome quando não tem CNPJ) — vazia por padrão, um cenário específico enche ela.
-    getDocs: async () => ({
-      empty: clientesCompartilhados.length === 0,
-      docs: clientesCompartilhados.map((c) => ({ data: () => c })),
-    }),
+    getDocs: async () => {
+      if (cibeleIndisponivel) throw new Error('cadastro compartilhado fora do ar (simulado)');
+      return { empty: clientesCompartilhados.length === 0, docs: clientesCompartilhados.map((c) => ({ data: () => c })) };
+    },
   },
 };
 // Fica valendo pro arquivo inteiro (não só pro cenário 4b) porque verificarCadastro cacheia a
@@ -104,6 +107,7 @@ const falsos = {
 // ferramenta chamada na mesma conversa) — setar isso só depois do primeiro uso não teria
 // efeito nos testes seguintes, igual não teria numa conversa de verdade.
 let clientesCompartilhados = [{ razao_social: 'MONLOTE URBANIZADORA LTDA', documento: '59888185000165', tipo: 'CNPJ' }];
+let cibeleIndisponivel = false;
 const fsFalso = falsos['firebase/firestore'];
 const carregarOriginal = Module._load;
 Module._load = function (req, parent, isMain) {
@@ -206,6 +210,20 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
     },
   ];
   await pedido('confere fornecedor sem cnpj');
+
+  console.log('\n4c) cadastro compartilhado fora do ar -> "indisponível", NUNCA "não encontrado" (achado do Codex)');
+  prepararEmpresa();
+  cibeleIndisponivel = true;
+  roteiro = [
+    resp([uso('verificar_cadastro', { entidades: [{ nome: 'BB RF', cnpj: '43.617.343/0001-02' }] })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('avisa que não conseguiu consultar (não que não existe)', res.content.includes('Não consegui consultar') && !res.content.includes('NÃO encontrados'), res.content);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('confere fornecedor com a nuvem fora do ar');
+  cibeleIndisponivel = false;
 
   console.log('\n5) buscar arquivo que não existe');
   prepararEmpresa();

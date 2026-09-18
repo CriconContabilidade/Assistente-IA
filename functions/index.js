@@ -45,7 +45,16 @@ const cibeleDb = getClientFirestore(cibeleApp);
 let cibeleSignInPromise = null;
 async function ensureCibeleAuth() {
   if (!cibeleSignInPromise) cibeleSignInPromise = signInAnonymously(cibeleAuth);
-  await cibeleSignInPromise;
+  try {
+    await cibeleSignInPromise;
+  } catch (err) {
+    // Sem limpar aqui, uma falha passageira (indisponibilidade momentânea) travava essa
+    // instância "quente" da function pra sempre — toda chamada seguinte reusava a MESMA
+    // promise já rejeitada e falhava na hora, sem nunca tentar de novo, até a instância
+    // reiniciar (achado do Codex). Limpa pra a próxima chamada poder tentar de novo.
+    cibeleSignInPromise = null;
+    throw err;
+  }
 }
 
 // Verifica se um fornecedor/cliente já existe no cadastro compartilhado (por CNPJ/CPF).
@@ -214,12 +223,15 @@ async function carregarArquivoSalvo(db, empresaId, nome) {
   const alvo = (nome || "").trim().toLowerCase();
   if (!alvo) return null;
 
+  // Mesmo limite (200) do histórico de documentos que entra no prompt de sistema — o
+  // buscar_arquivo tem que conseguir reabrir qualquer relatório que a IA já viu, não só os 60
+  // mais recentes (achado do Codex: prompt lista até 200, aqui só procurava nos últimos 60).
   const documentosSnap = await db
     .collection("assistenteIA_empresas")
     .doc(empresaId)
     .collection("documentos")
     .orderBy("criadoEm", "desc")
-    .limit(60)
+    .limit(200)
     .get();
 
   for (const docSnap of documentosSnap.docs) {
@@ -318,7 +330,11 @@ function valorObrigatorioTxt(n, nome) {
 }
 
 function campoTxt(valor, nome, obrigatorio = false) {
-  let texto = String(valor ?? "").trim().replace(/[\r\n]+/g, " ");
+  let texto = String(valor ?? "").trim().replace(/[\r\n]+/g, " ").replace(/\t/g, " ");
+  // Tab já virou espaço acima; qualquer outro caractere de controle (NUL, etc.) não tem uso
+  // legítimo em texto livre do arquivo do Domínio e pode gerar linha rejeitada ou lida errado
+  // pelo sistema — tira em silêncio, igual já faz com quebra de linha (achado do Codex).
+  texto = texto.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
   if (texto.includes(";")) {
     texto = texto.replace(/\s*;\s*/g, " - ");
   }
@@ -511,6 +527,24 @@ const FILE_NAMES = {
   servico_prest: "ServicoPrest.txt",
 };
 
+// O Domínio não tem marcador de "fim de lote" — sem o "1" pra abrir o próximo lançamento, ele
+// emenda com o anterior na mesma competência inteira (achado em uso real: um mês inteiro de
+// lançamentos simples, cada um com débito e crédito na própria linha, virou UM lançamento só
+// dentro do Domínio, porque só a primeira linha do arquivo tinha "inicia lote" = 1 e o resto
+// ficou em branco). Uma linha com débito E crédito preenchidos NUNCA é continuação de lote —
+// continuação de partida múltipla, por definição, só preenche um dos dois lados — então toda
+// linha "completa" (os dois lados preenchidos) É o início do próprio lançamento e leva "1",
+// preenchido aqui mesmo se a IA esquecer, sem depender só do prompt pra acertar isso.
+function normalizarIniciaLote(linhas) {
+  return linhas.map((l) => {
+    const temDebito = String(l.debito ?? "").trim() !== "";
+    const temCredito = String(l.credito ?? "").trim() !== "";
+    const jaTemUm = String(l.iniciaLote ?? "").trim() === "1";
+    if (temDebito && temCredito && !jaTemUm) return { ...l, iniciaLote: "1" };
+    return l;
+  });
+}
+
 // Partidas múltiplas: o Domínio abre um lote na linha com "inicia lote" = 1, e as linhas
 // seguintes (até o próximo "1") pertencem a ele — é só dentro de um lote que uma linha pode
 // ter apenas débito ou apenas crédito, e o lote tem que fechar (débitos = créditos). Fora de
@@ -544,7 +578,8 @@ function validarLotesLanctos(linhas) {
   fecharLote();
 }
 
-function buildLanctosLines(linhas) {
+function buildLanctosLines(linhasOriginais) {
+  const linhas = normalizarIniciaLote(linhasOriginais);
   validarLotesLanctos(linhas);
   return linhas.map((l, index) => {
     const debito = campoEstruturalTxt(l.debito, `débito da linha ${index + 1}`, false);
@@ -978,7 +1013,8 @@ FORMATO EXATO DOS ARQUIVOS DE IMPORTAÇÃO DO DOMÍNIO — confirmados nas ferra
 
 Convenções gerais de todos os TXT: separador ";", quebra de linha CRLF (inclusive na última linha), arquivo em ANSI/Latin-1 (o Domínio desconfigura acentuação — sempre tire acentos dos campos de texto livre no TXT, mas mantenha acentuado numa eventual planilha Excel de conferência). Valor monetário: sem casas decimais quando o valor é inteiro (ex: "1000"), senão 2 casas com vírgula (ex: "1944,18") — nunca ponto decimal. Nome do arquivo é sempre um destes fixos, nunca um nome descritivo:
 
-- Lançamentos → "lanctos.txt". Colunas nesta ordem: Data (DD/MM/AAAA); Débito; Crédito; Valor; Cód. Hist. (geralmente vazio); Complemento/Histórico (sem acento); Inicia Lote ("1" na primeira linha de um lançamento composto, vazio nas linhas seguintes do mesmo lote — só a SOMA do lote precisa fechar Débito=Crédito, não cada linha); Código Emp.; Centro de Custo Débito; Centro de Custo Crédito.
+- Lançamentos → "lanctos.txt". Colunas nesta ordem: Data (DD/MM/AAAA); Débito; Crédito; Valor; Cód. Hist. (geralmente vazio); Complemento/Histórico (sem acento); Inicia Lote; Código Emp.; Centro de Custo Débito; Centro de Custo Crédito.
+  INICIA LOTE — regra importante (o Domínio não tem marcador de "fim de lote": sem o "1" separando, ele emenda um lançamento no outro, virando tudo um lançamento só): toda linha que tem DÉBITO E CRÉDITO preenchidos na própria linha (lançamento simples) leva "iniciaLote": "1" — SEMPRE, mesmo fora de partida múltipla (o sistema já corrige sozinho se você esquecer, mas prefira já mandar certo). Só fica vazio numa linha de CONTINUAÇÃO de partida múltipla, ou seja, uma linha que tem só débito OU só crédito preenchido (nunca os dois) e vem logo depois da linha que abriu aquele lote com "1".
 - Baixa de Entradas (fornecedor) → "baixa_ent.txt". Colunas: número do título; CNPJ/CPF (só dígitos); vencimento (DD/MM/AAAA); data da baixa (DD/MM/AAAA); valor pago; juros; multa; desconto.
 - Baixa de Saídas e Baixa de Serviços (cliente) → "baixa_sai.txt" / "baixa_ser.txt" (mesmo layout, só muda o nome do arquivo). Colunas: número do título; CNPJ/CPF; vencimento; data da baixa; valor recebido; juros; multa; desconto; PIS; COFINS; CSLL; IRRF.
 - Nota Fiscal de Serviço → "ServicoPrest.txt". 28 colunas nesta ordem: CPF/CNPJ; Razão Social; UF; Município; Endereço; Número Documento; Série (use "U"); Data; Situação (0); Acumulador (1); CFPS (9101); Valor Serviços; Valor Descontos; Valor Dedução; Valor Contábil (= Valor Serviços); Base de Cálculo; Alíquota ISS; Valor ISS Normal; Valor ISS Retido; Valor IRRF; Valor PIS; Valor COFINS; Valor CSLL; Valor CRF; Valor INSS; Código do Item; Quantidade; Valor Unitário (as colunas sem valor conhecido ficam vazias, não zero, exceto onde indicado).
@@ -997,7 +1033,7 @@ Qual delas gostaria de importar primeiro?"
 Quando o usuário escolher um (pelo número ou nome), na sua PRÓXIMA resposta chame a ferramenta gerar_arquivo — ela é a ÚNICA forma de entregar um arquivo, e vira um botão de download de verdade. Chame a ferramenta primeiro e só depois de receber o resultado escreva a confirmação curta (ex: "Aqui está o arquivo, revise antes de importar."); se o resultado vier com erro, corrija e chame de novo, ou explique ao usuário o que falta. Se o usuário pediu vários tipos diferentes de arquivo (ex.: NF de rendimentos E NF de aluguel), chame a ferramenta de cada tipo E escreva confirmação curta ANTES de passar para o próximo tipo — uma tipo por resposta para evitar confusão, ou se fizer tudo na mesma resposta, sempre escreva algo entre uma chamada e a próxima (ex: "Gerado. Agora o de aluguel: ..."). NUNCA diga que gerou ou enviou um arquivo sem ter recebido sucesso da ferramenta nesta mesma resposta. Respostas antigas desta conversa podem dizer "aqui está o arquivo" — só as que têm o "[Registro do sistema: ... gerar_arquivo ...]" realmente geraram algo; as outras não entregaram nada, e pra entregar agora é preciso chamar a ferramenta de novo. NUNCA escreva as linhas/lançamentos por extenso no texto da resposta (nada de listar data, valor, débito/crédito etc. linha por linha na mensagem) — essa informação já vai dentro do arquivo gerado, repetir é redundante; o texto da resposta deve ser só a confirmação curta. Nunca invente uma linha que não foi confirmada na conversa. Parâmetros da ferramenta gerar_arquivo ("tipo" e "linhas"), por tipo:
 
 - Lançamentos: {"tipo":"lanctos","linhas":[{"data":"DD/MM/AAAA","debito":"código","credito":"código","valor":0,"codHist":"","complemento":"texto","iniciaLote":"1 ou vazio","codigoEmp":"código","centroCustoDebito":"","centroCustoCredito":""}]}
-  PARTIDAS MÚLTIPLAS (um valor rateado em várias contas): monte um lote. A primeira linha do lote leva "iniciaLote": "1"; as linhas seguintes, até o próximo "1", pertencem a ele. Só dentro de um lote uma linha pode ter apenas "debito" ou apenas "credito" (deixe o outro em branco), e a soma dos débitos do lote tem que ser igual à soma dos créditos — senão o arquivo é recusado. Lançamento simples (uma conta a débito e outra a crédito) não precisa de lote.
+  PARTIDAS MÚLTIPLAS (um valor rateado em várias contas): monte um lote. A primeira linha do lote leva "iniciaLote": "1"; as linhas seguintes, até o próximo "1", pertencem a ele. Só dentro de um lote uma linha pode ter apenas "debito" ou apenas "credito" (deixe o outro em branco), e a soma dos débitos do lote tem que ser igual à soma dos créditos — senão o arquivo é recusado. Lançamento simples (uma conta a débito e outra a crédito na mesma linha) TAMBÉM leva "iniciaLote": "1" — é o lote dele mesmo, de uma linha só (ver a regra de INICIA LOTE acima).
   HISTÓRICO (campo "complemento") — NÃO invente a redação. Cada empresa tem um padrão de histórico próprio, que já está no Diário dela (no histórico de relatórios processados): use a MESMA redação que aparece lá pra aquele tipo de lançamento, copiando o jeito de escrever (abreviações, ordem das palavras, se cita nome de fornecedor/sócio, se cita número de documento). Quando for um tipo de lançamento que ainda não existe no Diário, siga o estilo dos históricos parecidos que já existem e confirme com o usuário antes de fechar o arquivo, em vez de inventar um texto novo do seu jeito.
 - Baixa de Entradas: {"tipo":"baixa_ent","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0}]}
 - Baixa de Saídas: {"tipo":"baixa_sai","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0,"pis":0,"cofins":0,"csll":0,"irrf":0}]} — se houver retençõesde impostos, mande os valores em pis, cofins, csll, irrf; senão deixe em 0.
@@ -1325,38 +1361,54 @@ exports.assistenteChat = onCall(
       // sequencial somava a latência de todas (ex. 30 fornecedores = 30x o tempo de 1 consulta
       // dentro da mesma rodada de ferramenta). Tenta por CNPJ primeiro (mais preciso); sem CNPJ,
       // ou se o CNPJ passado não bateu com nada, cai pra busca por nome antes de desistir.
+      // Erro de verdade (cadastro compartilhado fora do ar) marca "indisponível" — NUNCA vira
+      // "não encontrado" silenciosamente, senão a IA afirma pro usuário que um fornecedor não
+      // está cadastrado quando na verdade o problema foi só uma falha de rede (achado do Codex).
       const achados = await Promise.all(
         validas.map(async (e) => {
           if (e.cnpj) {
-            const porCnpj = await lookupEntidade(e.cnpj).catch((err) => {
+            try {
+              const porCnpj = await lookupEntidade(e.cnpj);
+              if (porCnpj) return { achado: porCnpj };
+            } catch (err) {
               console.error(`verificar_cadastro: erro buscando "${e.nome}" por CNPJ (${e.cnpj}):`, err);
-              return null;
-            });
-            if (porCnpj) return porCnpj;
+              return { indisponivel: true };
+            }
           }
-          return lookupEntidadePorNome(e.nome).catch((err) => {
+          try {
+            const porNome = await lookupEntidadePorNome(e.nome);
+            return { achado: porNome };
+          } catch (err) {
             console.error(`verificar_cadastro: erro buscando "${e.nome}" por nome:`, err);
-            return null;
-          });
+            return { indisponivel: true };
+          }
         })
       );
-      log(`verificar_cadastro: ${validas.length} entidade(s) consultada(s), ${achados.filter(Boolean).length} encontrada(s)`);
+      log(`verificar_cadastro: ${validas.length} entidade(s) consultada(s), ${achados.filter((a) => a.achado).length} encontrada(s), ${achados.filter((a) => a.indisponivel).length} indisponível(is)`);
       const encontrados = [];
       const faltando = [];
-      validas.forEach((e, i) => (achados[i] ? encontrados : faltando).push(String(e.nome)));
+      const indisponiveis = [];
+      validas.forEach((e, i) => {
+        const r = achados[i];
+        if (r.achado) encontrados.push(String(e.nome));
+        else if (r.indisponivel) indisponiveis.push(String(e.nome));
+        else faltando.push(String(e.nome));
+      });
       const cnpjEmpresa = normalizarDocumento(empresa.cnpj);
       let empresaEncontrada = (empresa.codigoDominio && cnpjEmpresa)
         ? { codigo: empresa.codigoDominio, cnpj: cnpjEmpresa }
         : null;
+      let empresaIndisponivel = false;
       if (!empresaEncontrada) {
         try {
           const doBanco = await lookupEmpresa(empresa.nome);
           if (doBanco) empresaEncontrada = { codigo: doBanco.codigo, cnpj: doBanco.cnpj || doBanco.documento };
         } catch (err) {
           console.error("Erro consultando empresa no cadastro compartilhado:", err);
+          empresaIndisponivel = true;
         }
       }
-      return { encontrados, faltando, empresaEncontrada };
+      return { encontrados, faltando, indisponiveis, empresaEncontrada, empresaIndisponivel };
     }
 
     // ---------------- padrões de lançamento estruturados (item 2 da Fase 3) ----------------
@@ -1523,15 +1575,21 @@ exports.assistenteChat = onCall(
         if (nome === "verificar_cadastro") {
           log(`verificar_cadastro chamado com: ${JSON.stringify(entrada && entrada.entidades)}`);
           const r = await verificarCadastro(entrada && entrada.entidades);
-          const partes = [
-            r.faltando.length
-              ? `NÃO encontrados no cadastro compartilhado: ${r.faltando.join(", ")} — peça ao usuário o CNPJ de cada um (ou o Cadastro de Fornecedores/Clientes só com esses).`
-              : "Todos foram encontrados no cadastro compartilhado.",
-          ];
+          const partes = [];
+          if (r.faltando.length) partes.push(`NÃO encontrados no cadastro compartilhado: ${r.faltando.join(", ")} — peça ao usuário o CNPJ de cada um (ou o Cadastro de Fornecedores/Clientes só com esses).`);
           if (r.encontrados.length) partes.push(`Encontrados: ${r.encontrados.join(", ")}.`);
-          partes.push(r.empresaEncontrada
-            ? `Empresa ${empresa.nome}: código ${r.empresaEncontrada.codigo}, CNPJ ${r.empresaEncontrada.cnpj}.`
-            : `A empresa "${empresa.nome}" não tem código e CNPJ do Domínio cadastrados — peça esses dois dados ao usuário.`);
+          // Indisponível é diferente de "não encontrado" — o cadastro compartilhado deu erro
+          // (rede, projeto fora do ar), não é que o fornecedor não existe. Nunca afirme ao
+          // usuário que não está cadastrado nesse caso (achado do Codex).
+          if (r.indisponiveis.length) partes.push(`Não consegui consultar o cadastro compartilhado agora pra: ${r.indisponiveis.join(", ")} (erro de conexão, não é que não está cadastrado) — tente de novo em instantes, ou pergunte o CNPJ direto ao usuário se for urgente.`);
+          if (!r.faltando.length && !r.indisponiveis.length) partes.unshift("Todos foram encontrados no cadastro compartilhado.");
+          if (r.empresaIndisponivel) {
+            partes.push(`Também não consegui consultar o cadastro da própria empresa "${empresa.nome}" agora (erro de conexão) — tente de novo antes de concluir que ela não tem código/CNPJ.`);
+          } else {
+            partes.push(r.empresaEncontrada
+              ? `Empresa ${empresa.nome}: código ${r.empresaEncontrada.codigo}, CNPJ ${r.empresaEncontrada.cnpj}.`
+              : `A empresa "${empresa.nome}" não tem código e CNPJ do Domínio cadastrados — peça esses dois dados ao usuário.`);
+          }
           return { content: partes.join(" ") };
         }
         if (nome === "consultar_padrao") {
@@ -1687,14 +1745,30 @@ exports.assistenteChat = onCall(
         .set({ arquivos: FieldValue.arrayUnion(...arquivosGerados.map((a) => a.nome)) }, { merge: true });
     }
 
-    // Grava a resposta no chat aqui no servidor — não depende do navegador do usuário
-    // continuar aberto até a IA terminar (antes disso, se a pessoa atualizasse a página
-    // antes da resposta voltar, a resposta nunca era salva, mesmo já pronta).
-    await db
-      .collection("assistenteIA_empresas")
-      .doc(empresaId)
-      .collection("mensagens")
-      .add({
+    // O fencing do attemptId (mais acima) só protegia o documento de controle — uma tentativa
+    // que já tinha perdido a posse do lease ainda chegava até aqui e gravava mensagem/documento
+    // normalmente, então "fencing" não impedia de verdade a mensagem duplicada nem o documento
+    // duplicado que o comentário original prometia (achado do Codex). Confere de novo bem antes
+    // de gravar: se outra tentativa já assumiu o lease nesse meio tempo, esta aqui não escreve
+    // nada nas coleções visíveis pro usuário — quem chamou ainda recebe a PRÓPRIA resposta de
+    // volta (o "return resultado" mais abaixo, que não depende dessas gravações).
+    let podeGravarEfeitos = true;
+    if (processamentoRef) {
+      const snapAgora = await processamentoRef.get();
+      podeGravarEfeitos = !snapAgora.exists || snapAgora.data().attemptId === meuAttemptId;
+    }
+    if (!podeGravarEfeitos) {
+      log("attemptId não bate mais (outra tentativa assumiu o lease) — não grava mensagem nem documento");
+    } else {
+      // Grava a resposta no chat aqui no servidor — não depende do navegador do usuário
+      // continuar aberto até a IA terminar (antes disso, se a pessoa atualizasse a página
+      // antes da resposta voltar, a resposta nunca era salva, mesmo já pronta). ID
+      // determinístico (derivado do requestId, quando existe) em vez de .add() com ID
+      // aleatório: a MESMA troca nunca vira duas linhas de mensagem na tela, mesmo se algum
+      // outro ponto ainda tentar gravar de novo (acidentalmente ou não).
+      const mensagensRef = db.collection("assistenteIA_empresas").doc(empresaId).collection("mensagens");
+      const msgRef = requestId ? mensagensRef.doc(`resp-${requestId}`) : mensagensRef.doc();
+      await msgRef.set({
         role: "assistant",
         text,
         files: [],
@@ -1703,25 +1777,26 @@ exports.assistenteChat = onCall(
         ...(requestId ? { requestId } : {}),
       });
 
-    // Todo relatório enviado vira uma ficha permanente com o resumo E o arquivo original
-    // guardado junto, pra IA poder reabrir depois em vez de pedir pro usuário reenviar.
-    const fileNames = arquivosParaGuardar.map((f) => f.name).filter(Boolean);
-    if (fileNames.length > 0) {
-      const documentoRef = await db
-        .collection("assistenteIA_empresas")
-        .doc(empresaId)
-        .collection("documentos")
-        .add({
-          arquivos: fileNames,
-          resumo: text,
-          criadoEm: FieldValue.serverTimestamp(),
-        });
-      try {
-        await salvarConteudoArquivos(documentoRef, arquivosParaGuardar);
-        log(`arquivos guardados (${arquivosParaGuardar.length})`);
-      } catch (err) {
-        // guardar o original é um extra: se falhar, o resumo já foi salvo e o chat segue
-        console.error("Erro guardando conteúdo dos arquivos:", err);
+      // Todo relatório enviado vira uma ficha permanente com o resumo E o arquivo original
+      // guardado junto, pra IA poder reabrir depois em vez de pedir pro usuário reenviar.
+      const fileNames = arquivosParaGuardar.map((f) => f.name).filter(Boolean);
+      if (fileNames.length > 0) {
+        const documentoRef = await db
+          .collection("assistenteIA_empresas")
+          .doc(empresaId)
+          .collection("documentos")
+          .add({
+            arquivos: fileNames,
+            resumo: text,
+            criadoEm: FieldValue.serverTimestamp(),
+          });
+        try {
+          await salvarConteudoArquivos(documentoRef, arquivosParaGuardar);
+          log(`arquivos guardados (${arquivosParaGuardar.length})`);
+        } catch (err) {
+          // guardar o original é um extra: se falhar, o resumo já foi salvo e o chat segue
+          console.error("Erro guardando conteúdo dos arquivos:", err);
+        }
       }
     }
     log("finalizado");
