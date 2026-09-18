@@ -586,6 +586,46 @@
     padding: 0 14px; font-size: 0.85rem; cursor: pointer; font-weight: 700;
   }
 
+  /* ---------- cadastro de clientes/fornecedores (gaveta larga) ---------- */
+  .drawer.wide { width: min(640px, 92vw); right: calc(-1 * min(640px, 92vw)); }
+  .drawer.wide.show { right: 0; }
+  .cad-search {
+    width: 100%; padding: 9px 11px; border-radius: 9px; border: 1px solid var(--panel-border);
+    background: rgba(255,255,255,0.03); color: var(--text); font-size: 0.85rem;
+  }
+  .cad-search:focus { outline: none; border-color: var(--accent2); }
+  .cad-counts { display: flex; gap: 18px; font-size: 0.78rem; color: var(--text-dim); }
+  .cad-counts b { color: var(--text); font-size: 0.95rem; }
+  .cad-result-count { font-size: 0.76rem; color: var(--text-faint); }
+  .cad-table-wrap { max-height: 260px; overflow: auto; border: 1px solid var(--panel-border); border-radius: 10px; }
+  .cad-table { width: 100%; border-collapse: collapse; font-size: 0.72rem; }
+  .cad-table th {
+    text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--panel-border);
+    color: var(--text-dim); position: sticky; top: 0; background: var(--panel-solid); white-space: nowrap;
+  }
+  .cad-table td { padding: 5px 8px; border-bottom: 1px solid var(--panel-border); color: var(--text); vertical-align: top; }
+  .cad-vinculo-chip {
+    display: inline-block; background: rgba(56,189,248,0.12); color: var(--accent2);
+    border-radius: 10px; padding: 1px 7px; font-size: 0.68rem; margin: 1px 3px 1px 0; white-space: nowrap;
+  }
+  .cad-field label { display: block; font-size: 0.74rem; color: var(--text-dim); margin-bottom: 4px; }
+  .cad-field input {
+    width: 100%; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--panel-border);
+    background: rgba(255,255,255,0.03); color: var(--text); font-size: 0.85rem;
+  }
+  .cad-field input:focus { outline: none; border-color: var(--accent2); }
+  .cad-dropzone {
+    border: 2px dashed var(--panel-border); border-radius: 10px; padding: 16px; text-align: center;
+    cursor: pointer; font-size: 0.8rem; color: var(--text-dim); transition: border-color .15s, background .15s;
+  }
+  .cad-dropzone:hover, .cad-dropzone.drag { border-color: var(--accent2); background: rgba(255,255,255,0.03); }
+  .cad-dropzone.done { border-style: solid; border-color: #22c55e; color: #22c55e; }
+  .cad-dropzone .small { font-size: 0.72rem; color: var(--text-faint); margin-top: 3px; }
+  .cad-status { font-size: 0.78rem; margin-top: 6px; white-space: pre-wrap; }
+  .cad-status.err { color: var(--danger); }
+  .cad-status.ok { color: #22c55e; }
+  .cad-section-title { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-dim); margin: 4px 0 0; }
+
   ::-webkit-scrollbar { width: 8px; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -650,6 +690,7 @@
 
     <input type="text" class="search-box" id="empresaSearch" placeholder="🔍 Buscar empresa...">
     <button class="new-empresa-btn" id="newEmpresaBtn">+ Nova empresa</button>
+    <button class="icon-btn" id="openCadastroBtn" style="width:100%; justify-content:center; margin-top:2px;">📇 Clientes e Fornecedores</button>
 
     <div class="empresa-list" id="empresaList"></div>
 
@@ -744,6 +785,44 @@
   <h3 id="docsTitle">Histórico de documentos</h3>
   <p class="hint">Todo relatório enviado nessa empresa fica registrado aqui, com o resumo que a IA gerou na hora — mesmo que a conversa fique muito longa, a IA sempre consulta esse histórico pra responder perguntas sobre documentos antigos.</p>
   <div id="docsList" style="display:flex; flex-direction:column; gap:10px;"></div>
+</div>
+
+<div class="drawer-overlay" id="cadDrawerOverlay"></div>
+<div class="drawer wide" id="cadDrawer">
+  <button class="close-drawer" id="closeCadDrawerBtn">✕</button>
+  <h3>Clientes e Fornecedores <span id="cadCloudBadge" class="admin-badge" style="background:var(--panel); color:var(--text-dim); font-weight:600;">conectando…</span></h3>
+  <p class="hint">Mesmo cadastro compartilhado de CNPJ/CPF usado pelas outras ferramentas do escritório (Baixas de Parcelas, Cadastro de Clientes e Fornecedores). Busque, ou arraste um relatório do Domínio pra atualizar — nunca apaga registro antigo, só soma.</p>
+
+  <input type="text" class="cad-search" id="cadSearchBox" placeholder="Buscar por CNPJ, CPF ou nome...">
+  <div class="cad-counts">
+    <span>Cadastrados: <b id="cadTotalCount">0</b></span>
+    <span>Empresas do escritório: <b id="cadEmpresasCount">0</b></span>
+  </div>
+  <div class="cad-result-count" id="cadResultCount"></div>
+  <div class="cad-table-wrap"><table class="cad-table">
+    <thead><tr><th>Documento</th><th>Tipo</th><th>Razão Social</th><th>Município/UF</th><th>Vínculos</th></tr></thead>
+    <tbody id="cadResultsBody"></tbody>
+  </table></div>
+
+  <p class="cad-section-title">Importar Clientes / Fornecedores (PDF do Domínio)</p>
+  <div class="cad-field">
+    <label>CNPJ da empresa deste relatório</label>
+    <input type="text" id="cadEmpresaCnpjInput" placeholder="00.000.000/0000-00 (tenta detectar sozinho)">
+  </div>
+  <div class="cad-dropzone" id="cadPdfDrop">
+    <div>Arraste o PDF de Clientes ou Fornecedores aqui, ou clique pra escolher</div>
+    <div class="small">Detecta sozinho qual dos dois é — nunca apaga registro antigo, só soma</div>
+  </div>
+  <input type="file" id="cadPdfFile" accept="application/pdf" style="display:none">
+  <div id="cadPdfStatus" class="cad-status" hidden></div>
+
+  <p class="cad-section-title">Cadastro de Empresas (código Domínio × CNPJ)</p>
+  <p class="hint">Guarda código ↔ apelido ↔ CNPJ de cada empresa que o escritório atende — usado pra nomear os vínculos na busca acima.</p>
+  <div class="cad-dropzone" id="cadEmpresasPdfDrop">
+    <div>Arraste o PDF de Cadastro de Empresas aqui</div>
+  </div>
+  <input type="file" id="cadEmpresasPdfFile" accept="application/pdf" style="display:none">
+  <div id="cadEmpresasPdfStatus" class="cad-status" hidden></div>
 </div>
 
 <script type="module">
@@ -1853,6 +1932,351 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const notas = (Array.isArray(emp.notas) ? emp.notas : []).filter((_, i) => i !== index);
     await updateDoc(doc(db, "assistenteIA_empresas", empId), { notas });
   }
+
+  // ---------------- gaveta: Clientes e Fornecedores ----------------
+  const cadDrawerOverlay = document.getElementById('cadDrawerOverlay');
+  const cadDrawer = document.getElementById('cadDrawer');
+  function openCadDrawer() { cadDrawerOverlay.classList.add('show'); cadDrawer.classList.add('show'); }
+  function closeCadDrawer() { cadDrawerOverlay.classList.remove('show'); cadDrawer.classList.remove('show'); }
+  document.getElementById('openCadastroBtn').addEventListener('click', openCadDrawer);
+  document.getElementById('closeCadDrawerBtn').addEventListener('click', closeCadDrawer);
+  cadDrawerOverlay.addEventListener('click', closeCadDrawer);
+</script>
+
+<!-- ---------------- Clientes e Fornecedores: mesmo cadastro compartilhado (Firestore
+     "conversoes-cibele") usado pela Baixas de Parcelas e pelo Cadastro de Clientes e
+     Fornecedores — trazido pra dentro do Stagiario pra não precisar abrir outra ferramenta.
+     Mesmo parser/UI daquela ferramenta, só trocando a casca visual pro tema do Stagiario. ---------------- -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+function cadOnlyDigits(s) { return (s || "").toString().replace(/\D/g, ""); }
+function cadNormalizeText(s) { return (s || "").toString().normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().trim(); }
+function cadFormatDocumento(d) {
+  d = cadOnlyDigits(d);
+  if (d.length === 14) return d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
+  if (d.length === 11) return d.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
+  return d;
+}
+
+async function cadExtractPdfPageLines(pdf, pageNum) {
+  const page = await pdf.getPage(pageNum);
+  const content = await page.getTextContent();
+  const rows = {};
+  content.items.forEach((it) => {
+    const y = Math.round(it.transform[5]);
+    if (!rows[y]) rows[y] = [];
+    rows[y].push({ x: it.transform[4], text: it.str });
+  });
+  const ys = Object.keys(rows).map(Number).sort((a, b) => b - a);
+  return ys.map((y) => rows[y].sort((a, b) => a.x - b.x).map((t) => t.text).join(" ").replace(/\s+/g, " ").trim()).filter((l) => l.length > 0);
+}
+async function cadExtractPdfAllLines(file) {
+  const buf = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+  const pages = [];
+  for (let p = 1; p <= pdf.numPages; p++) pages.push(await cadExtractPdfPageLines(pdf, p));
+  return pages;
+}
+
+function cadWireDropzone(dropId, inputId, onFile) {
+  const drop = document.getElementById(dropId);
+  const input = document.getElementById(inputId);
+  drop.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => { if (input.files[0]) onFile(input.files[0], drop); });
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('drag'));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault(); drop.classList.remove('drag');
+    if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0], drop);
+  });
+}
+function cadMarkDropDone(drop, label) {
+  drop.classList.add('done');
+  drop.firstElementChild.textContent = '✓ ' + label;
+}
+
+// ---- parser: Clientes/Fornecedores.pdf e Cadastro de Empresas.pdf (mesmo formato usado pela
+// Baixas de Parcelas e pela Conversões Cibele — cadastro compartilhado) ----
+const CAD_BR_UFS = { "ACRE": "AC", "ALAGOAS": "AL", "AMAPA": "AP", "AMAZONAS": "AM", "BAHIA": "BA", "CEARA": "CE", "DISTRITO FEDERAL": "DF", "ESPIRITO SANTO": "ES", "GOIAS": "GO", "MARANHAO": "MA", "MATO GROSSO DO SUL": "MS", "MATO GROSSO": "MT", "MINAS GERAIS": "MG", "PARAIBA": "PB", "PARANA": "PR", "PERNAMBUCO": "PE", "PIAUI": "PI", "RIO DE JANEIRO": "RJ", "RIO GRANDE DO NORTE": "RN", "RIO GRANDE DO SUL": "RS", "RONDONIA": "RO", "RORAIMA": "RR", "SANTA CATARINA": "SC", "SAO PAULO": "SP", "SERGIPE": "SE", "TOCANTINS": "TO", "PARA": "PA" };
+const CAD_BR_UF_NAMES = Object.keys(CAD_BR_UFS).sort((a, b) => b.length - a.length);
+const CAD_DOC_RE = /(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2})/;
+const CAD_CNPJ_HEADER_RE = /CNPJ:\s*([\d.\/-]{14,18})/;
+
+function cadSplitCidadeUfPais(tail) {
+  let t = cadNormalizeText(tail).replace(/\bBRASIL\b\s*$/, "").trim();
+  t = t.replace(/^\d{4,12}\s+/, "");
+  for (const name of CAD_BR_UF_NAMES) {
+    const re = new RegExp("\\s+" + name + "$");
+    if (re.test(t)) return { municipio: t.replace(re, "").trim(), uf: CAD_BR_UFS[name] };
+  }
+  return { municipio: t.trim(), uf: "" };
+}
+function cadParseFornecedoresPdf(allLines) {
+  const out = [];
+  allLines.forEach((line) => {
+    if (!/BRASIL\s*$/i.test(line)) return;
+    const m = line.match(CAD_DOC_RE);
+    if (!m) return;
+    const before = line.slice(0, m.index).trim();
+    const after = line.slice(m.index + m[0].length).trim();
+    const codMatch = before.match(/^(\d{1,6})\s*(.*)$/);
+    const codigo = codMatch ? codMatch[1] : null;
+    const nome = (codMatch ? codMatch[2] : before).trim();
+    if (!nome) return;
+    const { municipio, uf } = cadSplitCidadeUfPais(after);
+    out.push({ codigo, documento: cadOnlyDigits(m[0]), tipo: cadOnlyDigits(m[0]).length === 14 ? "CNPJ" : "CPF", razao_social: nome, municipio, uf });
+  });
+  return out;
+}
+function cadParseClientesPdf(allLines) {
+  const out = [];
+  const headerRe = /^\s*(\d{1,6})\s+(.+?)\s+(CNPJ|CPF|Outros)\s+([\d.\/-]*)/;
+  const cityRe = /^(.+?)\s+([A-Z]{2})\s+(\d{5}-\d{3}|-)(?=\s|$)/;
+  for (let i = 0; i < allLines.length; i++) {
+    const hm = allLines[i].match(headerRe);
+    if (!hm) continue;
+    const [, codigo, nomeRaw, , docRaw] = hm;
+    const docc = cadOnlyDigits(docRaw);
+    if (!docc) continue;
+    let municipio = "", uf = "";
+    for (let j = i + 1; j <= i + 2 && j < allLines.length; j++) {
+      const cm = allLines[j].match(cityRe);
+      if (cm) { municipio = cm[1].trim(); uf = cm[2]; break; }
+    }
+    const razao = nomeRaw.replace(new RegExp("^" + codigo + "\\s*"), "").trim();
+    out.push({ codigo, documento: docc, tipo: docc.length === 14 ? "CNPJ" : "CPF", razao_social: razao, municipio, uf });
+  }
+  return out;
+}
+const CAD_EMPRESA_ROW_RE = /^(?:1\s+)?(\d{1,6})\s+(.+?)\s*(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}|\d{3}\.\d{3}\.\d{3}-\d{2})/;
+function cadParseEmpresasPdf(allLines) {
+  const out = [];
+  allLines.forEach((line) => {
+    const m = line.match(CAD_EMPRESA_ROW_RE);
+    if (!m) return;
+    const [, codigo, nome, docFmt] = m;
+    const docc = cadOnlyDigits(docFmt);
+    out.push({ codigo, nome: nome.trim(), documento: docc, tipo: docc.length === 14 ? "CNPJ" : "CPF" });
+  });
+  return out;
+}
+
+// ---- estado local (espelha o Firestore compartilhado, ver módulo abaixo) ----
+window.cadClientesDB = {};
+window.cadEmpresasDB = {};
+
+function cadVinculosHtml(reg) {
+  const codigos = reg.codigos || {};
+  const chips = Object.keys(codigos).map((chave) => {
+    const m = chave.match(/^(\d+)_(cliente|fornecedor)$/);
+    if (!m) return "";
+    const [, empresaCnpj, papel] = m;
+    const empresa = window.cadEmpresasDB[empresaCnpj];
+    const nomeEmpresa = empresa ? empresa.nome : cadFormatDocumento(empresaCnpj);
+    return `<span class="cad-vinculo-chip">${papel === "cliente" ? "Cliente de" : "Fornecedor de"} ${nomeEmpresa} · cód. ${codigos[chave]}</span>`;
+  }).filter(Boolean);
+  return chips.join("") || '<span style="color:var(--text-faint); font-size:0.7rem;">sem vínculo registrado</span>';
+}
+function cadRenderResults() {
+  const searchBox = document.getElementById('cadSearchBox');
+  const q = cadNormalizeText(searchBox.value);
+  const qDigits = cadOnlyDigits(searchBox.value);
+  const body = document.getElementById('cadResultsBody');
+  document.getElementById('cadTotalCount').textContent = Object.keys(window.cadClientesDB).length;
+  document.getElementById('cadEmpresasCount').textContent = Object.keys(window.cadEmpresasDB).length;
+
+  let keys = Object.keys(window.cadClientesDB);
+  if (q || qDigits) {
+    keys = keys.filter((k) => {
+      const reg = window.cadClientesDB[k];
+      if (qDigits.length >= 3 && k.includes(qDigits)) return true;
+      if (q.length >= 2 && cadNormalizeText(reg.razao_social).includes(q)) return true;
+      return false;
+    });
+  }
+  keys.sort((a, b) => cadNormalizeText(window.cadClientesDB[a].razao_social).localeCompare(cadNormalizeText(window.cadClientesDB[b].razao_social)));
+
+  const LIMIT = 200;
+  const shown = keys.slice(0, LIMIT);
+  const countEl = document.getElementById('cadResultCount');
+  countEl.textContent = q || qDigits
+    ? `${keys.length} resultado(s)${keys.length > LIMIT ? ` — mostrando os primeiros ${LIMIT}` : ""}`
+    : `${keys.length} registro(s) no total — digite pra buscar`;
+
+  body.innerHTML = shown.map((k) => {
+    const r = window.cadClientesDB[k];
+    return `<tr>
+      <td>${cadFormatDocumento(k)}</td>
+      <td>${r.tipo || ""}</td>
+      <td>${r.razao_social || ""}</td>
+      <td>${[r.municipio, r.uf].filter(Boolean).join("/")}</td>
+      <td>${cadVinculosHtml(r)}</td>
+    </tr>`;
+  }).join("") || (q || qDigits ? '<tr><td colspan="5" style="color:var(--text-faint);">Nenhum registro encontrado.</td></tr>' : "");
+}
+document.getElementById('cadSearchBox').addEventListener('input', cadRenderResults);
+window.cadRenderResults = cadRenderResults;
+
+cadWireDropzone('cadPdfDrop', 'cadPdfFile', async (f, d) => {
+  const status = document.getElementById('cadPdfStatus');
+  status.hidden = false; status.className = 'cad-status'; status.textContent = 'Lendo PDF...';
+  try {
+    const pages = await cadExtractPdfAllLines(f);
+    const allLines = pages.flat();
+    const fullText = allLines.join("\n");
+
+    let empresaCnpj = cadOnlyDigits(document.getElementById('cadEmpresaCnpjInput').value);
+    if (!empresaCnpj) {
+      const cm = fullText.match(CAD_CNPJ_HEADER_RE);
+      if (cm) { empresaCnpj = cadOnlyDigits(cm[1]); document.getElementById('cadEmpresaCnpjInput').value = cadFormatDocumento(empresaCnpj); }
+    }
+
+    const isFornecedores = allLines.some((l) => /^FORNECEDORES$/i.test(l.trim()));
+    const isClientes = allLines.some((l) => /C.digo\s+Nome\s+Raz.o Social/i.test(l));
+    let parsed = [], tipoTitulo = "cliente";
+    if (isFornecedores) { parsed = cadParseFornecedoresPdf(allLines); tipoTitulo = "fornecedor"; }
+    else if (isClientes) { parsed = cadParseClientesPdf(allLines); tipoTitulo = "cliente"; }
+    else {
+      const a = cadParseFornecedoresPdf(allLines), b = cadParseClientesPdf(allLines);
+      if (a.length >= b.length) { parsed = a; tipoTitulo = "fornecedor"; } else { parsed = b; tipoTitulo = "cliente"; }
+    }
+    if (!parsed.length) throw new Error("Não consegui reconhecer nenhum registro nesse PDF.");
+    if (!empresaCnpj) throw new Error("Não achei o CNPJ da empresa no cabeçalho do PDF — informe o CNPJ da empresa no campo acima antes de importar.");
+
+    let addedCli = 0, updatedCod = 0;
+    const dirty = {};
+    parsed.forEach((p) => {
+      if (!p.documento) return;
+      if (!window.cadClientesDB[p.documento]) {
+        window.cadClientesDB[p.documento] = { documento: p.documento, tipo: p.tipo, razao_social: p.razao_social, endereco: "", municipio: p.municipio, uf: p.uf, cep: "", codigos: {}, fonte: "importado-stagiario" };
+        addedCli++;
+      }
+      if (!window.cadClientesDB[p.documento].codigos) window.cadClientesDB[p.documento].codigos = {};
+      if (p.codigo) {
+        const chave = `${empresaCnpj}_${tipoTitulo}`;
+        if (window.cadClientesDB[p.documento].codigos[chave] !== p.codigo) {
+          window.cadClientesDB[p.documento].codigos[chave] = p.codigo;
+          updatedCod++;
+        }
+      }
+      dirty[p.documento] = window.cadClientesDB[p.documento];
+    });
+    if (window.cadastroCloud) window.cadastroCloud.pushManyClientes(dirty);
+    status.className = 'cad-status ok';
+    status.textContent = `Cadastro atualizado: ${addedCli} registro(s) novo(s), ${updatedCod} código(s) vinculado(s) (${tipoTitulo}).`;
+    cadMarkDropDone(d, `${parsed.length} registros lidos`);
+    cadRenderResults();
+  } catch (err) {
+    status.className = 'cad-status err'; status.textContent = 'Erro: ' + err.message;
+  }
+});
+
+cadWireDropzone('cadEmpresasPdfDrop', 'cadEmpresasPdfFile', async (f, d) => {
+  const status = document.getElementById('cadEmpresasPdfStatus');
+  status.hidden = false; status.className = 'cad-status'; status.textContent = 'Lendo PDF...';
+  try {
+    const pages = await cadExtractPdfAllLines(f);
+    const allLines = pages.flat();
+    if (!allLines.some((l) => /CADASTRO DE EMPRESAS/i.test(l))) {
+      throw new Error('Esse PDF não parece ser o relatório "Cadastro de Empresas" do Domínio.');
+    }
+    const parsed = cadParseEmpresasPdf(allLines);
+    if (!parsed.length) throw new Error("Não consegui reconhecer nenhuma empresa nesse PDF.");
+    let added = 0, updated = 0;
+    const dirty = {};
+    parsed.forEach((p) => {
+      if (!p.documento) return;
+      const existing = window.cadEmpresasDB[p.documento];
+      if (!existing) { added++; } else if (existing.codigo !== p.codigo || existing.nome !== p.nome) { updated++; }
+      window.cadEmpresasDB[p.documento] = { codigo: p.codigo, nome: p.nome, documento: p.documento, razao_social: p.nome, tipo: p.tipo };
+      dirty[p.documento] = window.cadEmpresasDB[p.documento];
+    });
+    if (window.cadastroCloud) window.cadastroCloud.pushManyEmpresas(dirty);
+    status.className = 'cad-status ok';
+    status.textContent = `Cadastro de empresas atualizado: ${added} nova(s), ${updated} atualizada(s).`;
+    cadMarkDropDone(d, `${parsed.length} empresas lidas`);
+    cadRenderResults();
+  } catch (err) {
+    status.className = 'cad-status err'; status.textContent = 'Erro: ' + err.message;
+  }
+});
+
+cadRenderResults();
+</script>
+
+<script type="module">
+import { initializeApp as cadInitializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
+import { getFirestore as cadGetFirestore, collection as cadCollection, doc as cadDoc, onSnapshot as cadOnSnapshot, writeBatch as cadWriteBatch } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import { getAuth as cadGetAuth, signInAnonymously as cadSignInAnonymously, onAuthStateChanged as cadOnAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+
+// Mesmo projeto Firebase ("conversoes-cibele") e mesmas coleções "clientes"/"empresas_cricon"
+// que a Baixas de Parcelas e o Cadastro de Clientes e Fornecedores já usam — cadastro único
+// compartilhado entre as ferramentas do escritório. Nome de app próprio ("cad-cibele") porque
+// o Stagiario já tem seu próprio app Firebase (projeto fechamento-contabil-7f0b7) inicializado
+// sem nome — dois apps default no mesmo processo dariam erro.
+const cadFirebaseConfig = {
+  apiKey: "AIzaSyCBIQkYYNt3K4gZ0OGqoqsU8Jnrsgxif5k",
+  authDomain: "conversoes-cibele.firebaseapp.com",
+  projectId: "conversoes-cibele",
+  storageBucket: "conversoes-cibele.firebasestorage.app",
+  messagingSenderId: "401784315449",
+  appId: "1:401784315449:web:5d459a524059c0978bb7e8",
+};
+const cadApp = cadInitializeApp(cadFirebaseConfig, "cad-cibele");
+const cadDb = cadGetFirestore(cadApp);
+const cadAuth = cadGetAuth(cadApp);
+let cadReady = false;
+
+function setCadCloudBadge(text, cor) {
+  const el = document.getElementById('cadCloudBadge');
+  if (!el) return;
+  el.textContent = text;
+  el.style.color = cor || '';
+}
+setCadCloudBadge('conectando…', '');
+cadSignInAnonymously(cadAuth).catch((err) => {
+  console.error("Cadastro cliente/fornecedor: erro de auth", err);
+  setCadCloudBadge('nuvem indisponível', 'var(--danger)');
+});
+
+cadOnAuthStateChanged(cadAuth, (user) => {
+  if (!user) return;
+  cadReady = true;
+
+  cadOnSnapshot(cadCollection(cadDb, "clientes"), (snap) => {
+    const cloudData = {};
+    snap.forEach((d) => cloudData[d.id] = d.data());
+    window.cadClientesDB = cloudData;
+    if (window.cadRenderResults) window.cadRenderResults();
+    setCadCloudBadge('sincronizado', '#22c55e');
+  }, (err) => { console.error("clientes onSnapshot", err); setCadCloudBadge('erro de sincronização', 'var(--danger)'); });
+
+  cadOnSnapshot(cadCollection(cadDb, "empresas_cricon"), (snap) => {
+    const cloudData = {};
+    snap.forEach((d) => cloudData[d.id] = d.data());
+    window.cadEmpresasDB = cloudData;
+    if (window.cadRenderResults) window.cadRenderResults();
+  }, (err) => console.error("empresas_cricon onSnapshot", err));
+});
+
+window.cadastroCloud = {
+  pushManyClientes(obj) {
+    if (!cadReady) return;
+    const keys = Object.keys(obj || {}); if (!keys.length) return;
+    const batch = cadWriteBatch(cadDb);
+    keys.forEach((k) => batch.set(cadDoc(cadDb, "clientes", k), obj[k]));
+    batch.commit().catch((e) => console.error("pushManyClientes", e));
+  },
+  pushManyEmpresas(obj) {
+    if (!cadReady) return;
+    const keys = Object.keys(obj || {}); if (!keys.length) return;
+    const batch = cadWriteBatch(cadDb);
+    keys.forEach((k) => batch.set(cadDoc(cadDb, "empresas_cricon", k), obj[k]));
+    batch.commit().catch((e) => console.error("pushManyEmpresas", e));
+  },
+};
 </script>
 
 </body>
