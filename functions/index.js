@@ -73,14 +73,27 @@ async function lookupEntidade(cnpj) {
 let cacheClientesPorNome = null;
 let cacheClientesPorNomeEm = 0;
 const CACHE_CLIENTES_MS = 5 * 60 * 1000;
+// verificarCadastro chama isso uma vez POR ENTIDADE em paralelo (Promise.all) — sem essa
+// promise compartilhada, várias entidades sem CNPJ na mesma mensagem viam o cache ainda vazio
+// ao mesmo tempo e cada uma disparava sua PRÓPRIA consulta da coleção inteira (visto em
+// produção: "cadastro compartilhado carregado" duas vezes pra uma mensagem só).
+let carregandoClientesPromise = null;
 async function carregarClientesParaBuscaPorNome() {
   if (cacheClientesPorNome && Date.now() - cacheClientesPorNomeEm < CACHE_CLIENTES_MS) return cacheClientesPorNome;
-  await ensureCibeleAuth();
-  const snap = await getDocs(clientCollection(cibeleDb, "clientes"));
-  cacheClientesPorNome = snap.docs.map((d) => d.data());
-  cacheClientesPorNomeEm = Date.now();
-  console.log(`cadastro compartilhado carregado pra busca por nome: ${cacheClientesPorNome.length} registro(s)`);
-  return cacheClientesPorNome;
+  if (carregandoClientesPromise) return carregandoClientesPromise;
+  carregandoClientesPromise = (async () => {
+    await ensureCibeleAuth();
+    const snap = await getDocs(clientCollection(cibeleDb, "clientes"));
+    cacheClientesPorNome = snap.docs.map((d) => d.data());
+    cacheClientesPorNomeEm = Date.now();
+    console.log(`cadastro compartilhado carregado pra busca por nome: ${cacheClientesPorNome.length} registro(s)`);
+    return cacheClientesPorNome;
+  })();
+  try {
+    return await carregandoClientesPromise;
+  } finally {
+    carregandoClientesPromise = null;
+  }
 }
 
 // Busca por nome — mesma comparação (sem acento/maiúscula, substring nos dois sentidos) usada
@@ -795,7 +808,7 @@ const FERRAMENTAS = [
   },
   {
     name: "verificar_cadastro",
-    description: "Confere fornecedores/clientes contra o cadastro compartilhado do escritório (o mesmo das outras ferramentas do Hub) e informa se a empresa atual tem código e CNPJ do Domínio. Use ao processar Contas a Pagar ou Contas a Receber, com todos os fornecedores/clientes distintos do relatório — mesmo sem saber o CNPJ, sempre tente com o nome (a busca já procura por aproximação sozinha). Se a resposta disser que bateu com mais de um nome parecido, mostre as opções e peça ao usuário só para CONFIRMAR qual é (não peça o CNPJ do zero nesse caso). Só peça o CNPJ direto quando a resposta disser que não achou nada, nem por aproximação — nunca peça o relatório de cadastro inteiro.",
+    description: "Confere fornecedores/clientes contra o cadastro compartilhado do escritório (o mesmo das outras ferramentas do Hub) e informa se a empresa atual tem código e CNPJ do Domínio. Use ao processar Contas a Pagar ou Contas a Receber, com todos os fornecedores/clientes distintos do relatório — mesmo sem saber o CNPJ, sempre tente com o nome (a busca já procura por aproximação sozinha). Se a resposta disser que bateu com mais de um nome parecido, mostre as opções e peça ao usuário só para CONFIRMAR qual é (não peça o CNPJ do zero nesse caso). Só peça o CNPJ direto quando a resposta disser que não achou nada, nem por aproximação — nunca peça o relatório de cadastro inteiro. IMPORTANTE: quando esta ferramenta encontrar o CNPJ de alguém, use ESSE CNPJ EXATO no campo 'cnpj' da linha correspondente quando chamar gerar_arquivo depois (baixa_ent, baixa_sai, baixa_ser) — nunca deixe o campo em branco pra um fornecedor/cliente que esta ferramenta já achou; CNPJ/CPF é obrigatório em toda baixa, o Domínio não localiza a conta certa sem ele.",
     input_schema: {
       type: "object",
       properties: {
@@ -903,7 +916,7 @@ const COLUNAS_ARQUIVO = {
   lanctos: ["Data", "Débito", "Crédito", "Valor", "Cód. Hist.", "Histórico", "Inicia lote", "Empresa", "C. Custo Déb.", "C. Custo Cred."],
   baixa_ent: ["Título", "CNPJ/CPF", "Vencimento", "Data da baixa", "Valor", "Juros", "Multa", "Desconto"],
   baixa_sai: ["Título", "CNPJ/CPF", "Vencimento", "Data da baixa", "Valor", "Juros", "Multa", "Desconto", "PIS", "COFINS", "CSLL", "IRRF"],
-  baixa_ser: ["Título", "CNPJ/CPF", "Vencimento", "Data da baixa", "Valor", "Juros", "Multa", "Desconto", "PIS", "COFINS", "CSLL", "IRRF"],
+  baixa_ser: ["Título", "Série", "CNPJ/CPF", "Vencimento", "Data da baixa", "Valor", "Juros", "Multa", "Desconto", "PIS", "COFINS", "CSLL", "IRRF"],
   servico_prest: ["CNPJ/CPF", "Razão Social", "UF", "Município", "Endereço", "Nº Documento", "Série", "Data", "Situação", "Acumulador", "CFPS", "Vlr. Serviços", "Descontos", "Dedução", "Vlr. Contábil", "Base Cálculo", "Alíq. ISS", "ISS Normal", "ISS Retido", "IRRF", "PIS", "COFINS", "CSLL", "CRF", "INSS", "Cód. Item", "Qtd.", "Vlr. Unitário"],
 };
 
