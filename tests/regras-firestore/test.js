@@ -125,6 +125,29 @@ async function caso(nome, esperado, promessa) {
   await caso('NÃO lê fechamento de outro', 'falha', getDocs(collection(func, 'assistenteIA_empresas/alheia/fechamentos')));
   await caso('NÃO grava fechamento', 'falha', setDoc(doc(func, 'assistenteIA_empresas/minha/fechamentos/2026-09'), { competencia: '09/2026' }));
 
+  console.log('\nSUBCOLEÇÕES SÓ DA CLOUD FUNCTION (achado do Codex: faltava teste explícito)');
+  // padroes, processamentos e documentos/{id}/conteudo(/pedacos) não têm nenhum match próprio
+  // nas regras — ninguém do navegador (nem admin) fala com elas direto, só a Cloud Function
+  // (Admin SDK, que não passa pelas regras). O comportamento padrão do Firestore sem regra
+  // nenhuma pro caminho é negar — este bloco prova isso, pra uma regra futura não abrir esse
+  // acesso sem ninguém perceber.
+  await caso('func NÃO lê padroes', 'falha', getDocs(collection(func, 'assistenteIA_empresas/minha/padroes')));
+  await caso('func NÃO grava em padroes', 'falha',
+    setDoc(doc(func, 'assistenteIA_empresas/minha/padroes/p1'), { palavrasChave: ['x'], debito: '1', credito: '2' }));
+  await caso('admin também NÃO lê padroes (só a Cloud Function, via Admin SDK)', 'falha',
+    getDocs(collection(admin, 'assistenteIA_empresas/minha/padroes')));
+  await caso('func NÃO lê processamentos', 'falha', getDocs(collection(func, 'assistenteIA_empresas/minha/processamentos')));
+  await caso('func NÃO grava em processamentos', 'falha',
+    setDoc(doc(func, 'assistenteIA_empresas/minha/processamentos/req-1'), { status: 'completed', text: 'x' }));
+  await caso('func NÃO lê o conteúdo guardado de um documento', 'falha',
+    getDocs(collection(func, 'assistenteIA_empresas/minha/documentos/d1/conteudo')));
+  await caso('func NÃO grava conteúdo num documento', 'falha',
+    setDoc(doc(func, 'assistenteIA_empresas/minha/documentos/d1/conteudo/a1'), { nome: 'x.pdf', totalPedacos: 1 }));
+  await caso('func NÃO lê os pedaços (base64) de um arquivo guardado', 'falha',
+    getDocs(collection(func, 'assistenteIA_empresas/minha/documentos/d1/conteudo/a1/pedacos')));
+  await caso('func NÃO grava um pedaço (base64) de arquivo', 'falha',
+    setDoc(doc(func, 'assistenteIA_empresas/minha/documentos/d1/conteudo/a1/pedacos/0'), { base64: 'ZmFrZQ==' }));
+
   console.log('CASOS DE BORDA');
   await caso('login com maiúsculas lê a própria', 'ok', getDoc(doc(funcMaiusc, 'assistenteIA_empresas/minha')));
   await caso('login com maiúsculas consulta a própria', 'ok',
