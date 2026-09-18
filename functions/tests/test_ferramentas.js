@@ -91,9 +91,19 @@ const falsos = {
     // produção estando correto (o SDK de verdade do Firestore não tem esse problema).
     doc: (_db, _col, id) => ({ id }),
     getDoc: async (ref) => ({ exists: () => ref.id === '43617343000102', data: () => ({}) }),
-    getDocs: async () => ({ empty: true, docs: [] }),
+    // clientesCompartilhados simula a coleção inteira "clientes" (usada pelo fallback de
+    // busca por nome quando não tem CNPJ) — vazia por padrão, um cenário específico enche ela.
+    getDocs: async () => ({
+      empty: clientesCompartilhados.length === 0,
+      docs: clientesCompartilhados.map((c) => ({ data: () => c })),
+    }),
   },
 };
+// Fica valendo pro arquivo inteiro (não só pro cenário 4b) porque verificarCadastro cacheia a
+// coleção em memória por alguns minutos (produção: evita rebaixar milhares de docs a cada
+// ferramenta chamada na mesma conversa) — setar isso só depois do primeiro uso não teria
+// efeito nos testes seguintes, igual não teria numa conversa de verdade.
+let clientesCompartilhados = [{ razao_social: 'MONLOTE URBANIZADORA LTDA', documento: '59888185000165', tipo: 'CNPJ' }];
 const fsFalso = falsos['firebase/firestore'];
 const carregarOriginal = Module._load;
 Module._load = function (req, parent, isMain) {
@@ -184,6 +194,18 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
   const fech = banco.get('assistenteIA_empresas/mv/fechamentos/2026-08');
   confere('relatório somado sem apagar o anterior e sem o inventado', JSON.stringify(fech.relatorios) === '["extrato","contas_pagar"]', JSON.stringify(fech.relatorios));
   confere('pendências gravadas', fech.pendencias === 3);
+
+  console.log('\n4b) verificar_cadastro acha por nome quando não tem CNPJ (achado em uso real)');
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('verificar_cadastro', { entidades: [{ nome: 'Monlote Urbanizadora' }] })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('acha pelo nome mesmo sem CNPJ', /Encontrados: Monlote Urbanizadora/.test(res.content), res.content);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('confere fornecedor sem cnpj');
 
   console.log('\n5) buscar arquivo que não existe');
   prepararEmpresa();

@@ -56,6 +56,37 @@ async function lookupEntidade(cnpj) {
   return snap.exists() ? snap.data() : null;
 }
 
+// Cache em memória do processo (sobrevive entre chamadas na mesma instância "quente" da
+// function) — evita baixar a coleção "clientes" inteira (milhares de docs) de novo a cada
+// fornecedor/cliente sem CNPJ na mesma conversa. Expira rápido: só precisa aguentar várias
+// consultas seguidas, não ficar desatualizado por muito tempo.
+let cacheClientesPorNome = null;
+let cacheClientesPorNomeEm = 0;
+const CACHE_CLIENTES_MS = 5 * 60 * 1000;
+async function carregarClientesParaBuscaPorNome() {
+  if (cacheClientesPorNome && Date.now() - cacheClientesPorNomeEm < CACHE_CLIENTES_MS) return cacheClientesPorNome;
+  await ensureCibeleAuth();
+  const snap = await getDocs(clientCollection(cibeleDb, "clientes"));
+  cacheClientesPorNome = snap.docs.map((d) => d.data());
+  cacheClientesPorNomeEm = Date.now();
+  return cacheClientesPorNome;
+}
+
+// Busca por nome — mesma comparação (sem acento/maiúscula, substring nos dois sentidos) usada
+// na busca da gaveta "Clientes e Fornecedores" da tela. Sem isso, um fornecedor/cliente que a
+// IA não conseguiu extrair o CNPJ do relatório (PIX com documento mascarado, contas a receber
+// sem coluna de CNPJ etc.) sempre voltava "não encontrado" mesmo já estando cadastrado, porque
+// verificarCadastro só tentava por CNPJ exato (achado em uso real).
+async function lookupEntidadePorNome(nome) {
+  const alvo = stripAccentsJs(String(nome || "")).toUpperCase().trim();
+  if (!alvo || alvo.length < 3) return null;
+  const registros = await carregarClientesParaBuscaPorNome();
+  return registros.find((r) => {
+    const razao = stripAccentsJs(String(r.razao_social || "")).toUpperCase();
+    return razao && (razao.includes(alvo) || alvo.includes(razao));
+  }) || null;
+}
+
 // Verifica se a empresa atual já está cadastrada no compartilhado (código + CNPJ do Domínio).
 async function lookupEmpresa(nomeEmpresa) {
   await ensureCibeleAuth();
@@ -1296,9 +1327,16 @@ exports.assistenteChat = onCall(
       const validas = (Array.isArray(entidades) ? entidades : []).filter((e) => e && e.nome);
       // Em paralelo: cada consulta é uma ida e volta ao projeto Firestore separado (Cibele) —
       // sequencial somava a latência de todas (ex. 30 fornecedores = 30x o tempo de 1 consulta
-      // dentro da mesma rodada de ferramenta).
+      // dentro da mesma rodada de ferramenta). Tenta por CNPJ primeiro (mais preciso); sem CNPJ,
+      // ou se o CNPJ passado não bateu com nada, cai pra busca por nome antes de desistir.
       const achados = await Promise.all(
-        validas.map((e) => (e.cnpj ? lookupEntidade(e.cnpj).catch(() => null) : Promise.resolve(null)))
+        validas.map(async (e) => {
+          if (e.cnpj) {
+            const porCnpj = await lookupEntidade(e.cnpj).catch(() => null);
+            if (porCnpj) return porCnpj;
+          }
+          return lookupEntidadePorNome(e.nome).catch(() => null);
+        })
       );
       const encontrados = [];
       const faltando = [];
