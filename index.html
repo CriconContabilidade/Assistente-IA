@@ -287,10 +287,17 @@
   }
   .assign-btn, .effort-btn {
     flex-shrink: 0; background: none; border: none; color: var(--text-faint);
-    cursor: pointer; font-size: 0.85rem; opacity: 0; transition: opacity .15s;
+    cursor: pointer; font-size: 0.85rem; opacity: 0; transition: opacity .15s, color .15s, background .15s;
+    padding: 5px 6px; border-radius: 7px; line-height: 1; min-width: 24px; min-height: 24px;
   }
   .empresa-item:hover .assign-btn, .empresa-item:hover .effort-btn { opacity: 1; }
-  .assign-btn:hover, .effort-btn:hover { color: var(--accent2); }
+  .assign-btn:hover, .effort-btn:hover { color: var(--accent2); background: rgba(255,255,255,0.07); }
+  /* estado visual do nível de esforço (achado do Antigravity: o ícone era sempre o mesmo ⚡,
+     sem nenhum jeito de saber o nível sem esperar o tooltip). */
+  .effort-btn.esforco-low { color: var(--text-faint); }
+  .effort-btn.esforco-medium { color: var(--accent2); }
+  .effort-btn.esforco-high { color: #f2c14e; }
+  .effort-btn.esforco-medium:hover, .effort-btn.esforco-high:hover { background: rgba(255,255,255,0.07); }
 
   /* ---------- main chat area ---------- */
   .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -353,6 +360,9 @@
     border: 1px solid var(--panel-border); white-space: pre-wrap;
   }
   .msg-path-image { max-width: 100%; border-radius: 8px; margin: 6px 0; display: block; }
+  /* evita o balão "pular" de largura quando o texto de espera troca pra uma frase mais longa
+     aos 12s (achado do Antigravity). */
+  #typingIndicator .msg-bubble { min-width: 240px; }
   .msg.assistant .msg-bubble { background: var(--panel); border-top-left-radius: 4px; }
   .msg.user .msg-bubble { background: linear-gradient(135deg, rgba(139,92,246,0.18), rgba(34,211,238,0.1)); border-top-right-radius: 4px; }
   .msg-bubble .file-chip {
@@ -622,6 +632,18 @@
   .cad-status.err { color: var(--danger); }
   .cad-status.ok { color: #22c55e; }
   .cad-section-title { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-dim); margin: 4px 0 0; }
+  /* abas Consultar/Importar — antes tudo ficava empilhado numa gaveta só, e a tabela (com
+     rolagem própria) brigava com a rolagem da gaveta pra alcançar os importadores mais embaixo
+     (scroll trap, achado do Antigravity). */
+  .cad-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--panel-border); padding-bottom: 2px; }
+  .cad-tab {
+    background: none; border: none; color: var(--text-dim); font-size: 0.82rem; font-weight: 600;
+    padding: 8px 12px; cursor: pointer; border-radius: 8px 8px 0 0; border-bottom: 2px solid transparent;
+  }
+  .cad-tab:hover { color: var(--text); }
+  .cad-tab.active { color: var(--text); border-bottom-color: var(--accent2); }
+  .cad-tab-panel { display: flex; flex-direction: column; gap: 14px; }
+  .cad-tab-panel[hidden] { display: none; }
 
   ::-webkit-scrollbar { width: 8px; }
   ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
@@ -794,41 +816,50 @@
 <div class="drawer wide" id="cadDrawer">
   <button class="close-drawer" id="closeCadDrawerBtn">✕</button>
   <h3>Clientes e Fornecedores <span id="cadCloudBadge" class="admin-badge" style="background:var(--panel); color:var(--text-dim); font-weight:600;">conectando…</span></h3>
-  <p class="hint">Mesmo cadastro compartilhado de CNPJ/CPF usado pelas outras ferramentas do escritório (Baixas de Parcelas, Cadastro de Clientes e Fornecedores). Busque, ou arraste um relatório do Domínio pra atualizar — nunca apaga registro antigo, só soma.</p>
+  <p class="hint">Mesmo cadastro compartilhado de CNPJ/CPF usado pelas outras ferramentas do escritório (Baixas de Parcelas, Cadastro de Clientes e Fornecedores). Busque, ou importe um relatório do Domínio pra atualizar — nunca apaga registro antigo, só soma.</p>
 
-  <input type="text" class="cad-search" id="cadSearchBox" placeholder="Buscar por CNPJ, CPF ou nome...">
-  <div class="cad-counts">
-    <span>Cadastrados: <b id="cadTotalCount">0</b></span>
-    <span>Empresas do escritório: <b id="cadEmpresasCount">0</b></span>
+  <div class="cad-tabs">
+    <button type="button" class="cad-tab active" id="cadTabConsultarBtn">🔍 Consultar</button>
+    <button type="button" class="cad-tab" id="cadTabImportarBtn">📥 Importar</button>
   </div>
-  <div class="cad-result-count" id="cadResultCount"></div>
-  <div class="cad-table-wrap cad-table-wrap-big"><table class="cad-table">
-    <thead><tr><th>Documento</th><th>Tipo</th><th>Razão Social</th><th>Município/UF</th><th>Vínculos</th></tr></thead>
-    <tbody id="cadResultsBody"></tbody>
-  </table></div>
 
-  <div class="cad-import-row">
-    <div class="cad-import-col">
-      <p class="cad-section-title">Importar Clientes / Fornecedores (PDF do Domínio)</p>
-      <div class="cad-field">
-        <label>CNPJ da empresa deste relatório</label>
-        <input type="text" id="cadEmpresaCnpjInput" placeholder="00.000.000/0000-00 (tenta detectar sozinho)">
-      </div>
-      <div class="cad-dropzone" id="cadPdfDrop">
-        <div>Arraste o PDF de Clientes ou Fornecedores aqui, ou clique pra escolher</div>
-        <div class="small">Detecta sozinho qual dos dois é — nunca apaga registro antigo, só soma</div>
-      </div>
-      <input type="file" id="cadPdfFile" accept="application/pdf" style="display:none">
-      <div id="cadPdfStatus" class="cad-status" hidden></div>
+  <div class="cad-tab-panel" id="cadTabConsultar">
+    <input type="text" class="cad-search" id="cadSearchBox" placeholder="Buscar por CNPJ, CPF ou nome...">
+    <div class="cad-counts">
+      <span>Cadastrados: <b id="cadTotalCount">0</b></span>
+      <span>Empresas do escritório: <b id="cadEmpresasCount">0</b></span>
     </div>
+    <div class="cad-result-count" id="cadResultCount"></div>
+    <div class="cad-table-wrap cad-table-wrap-big"><table class="cad-table">
+      <thead><tr><th>Documento</th><th>Tipo</th><th>Razão Social</th><th>Município/UF</th><th>Vínculos</th></tr></thead>
+      <tbody id="cadResultsBody"></tbody>
+    </table></div>
+  </div>
 
-    <div class="cad-import-col">
-      <p class="cad-section-title">Cadastro de Clientes Cricon</p>
-      <div class="cad-dropzone" id="cadEmpresasPdfDrop">
-        <div>Arraste o PDF de Cadastro de Empresas aqui</div>
+  <div class="cad-tab-panel" id="cadTabImportar" hidden>
+    <div class="cad-import-row">
+      <div class="cad-import-col">
+        <p class="cad-section-title">Importar Clientes / Fornecedores (PDF do Domínio)</p>
+        <div class="cad-field">
+          <label>CNPJ da empresa deste relatório</label>
+          <input type="text" id="cadEmpresaCnpjInput" placeholder="00.000.000/0000-00 (tenta detectar sozinho)">
+        </div>
+        <div class="cad-dropzone" id="cadPdfDrop">
+          <div>Arraste o PDF de Clientes ou Fornecedores aqui, ou clique pra escolher</div>
+          <div class="small">Detecta sozinho qual dos dois é — nunca apaga registro antigo, só soma</div>
+        </div>
+        <input type="file" id="cadPdfFile" accept="application/pdf" style="display:none">
+        <div id="cadPdfStatus" class="cad-status" hidden></div>
       </div>
-      <input type="file" id="cadEmpresasPdfFile" accept="application/pdf" style="display:none">
-      <div id="cadEmpresasPdfStatus" class="cad-status" hidden></div>
+
+      <div class="cad-import-col">
+        <p class="cad-section-title">Cadastro de Clientes Cricon</p>
+        <div class="cad-dropzone" id="cadEmpresasPdfDrop">
+          <div>Arraste o PDF de Cadastro de Empresas aqui</div>
+        </div>
+        <input type="file" id="cadEmpresasPdfFile" accept="application/pdf" style="display:none">
+        <div id="cadEmpresasPdfStatus" class="cad-status" hidden></div>
+      </div>
     </div>
   </div>
 </div>
@@ -1209,11 +1240,14 @@
         assign.textContent = '👤';
         item.appendChild(assign);
 
+        const nivelAtual = ESFORCO_ORDEM.includes(emp.esforco) ? emp.esforco : 'low';
         const effort = document.createElement('button');
-        effort.className = 'effort-btn';
+        effort.className = `effort-btn esforco-${nivelAtual}`;
         effort.type = 'button';
-        effort.title = `Nível de raciocínio da IA: ${ESFORCO_LABEL[emp.esforco] || ESFORCO_LABEL.low} (clique pra trocar)`;
-        effort.textContent = '⚡';
+        effort.title = `Nível de raciocínio da IA: ${ESFORCO_LABEL[nivelAtual]} (clique pra trocar)`;
+        // quantidade de raios acompanha o nível — dá pra ver o estado sem esperar o tooltip
+        // (achado do Antigravity: antes era sempre o mesmo ícone, sem feedback visual nenhum).
+        effort.textContent = '⚡'.repeat(ESFORCO_ORDEM.indexOf(nivelAtual) + 1);
         item.appendChild(effort);
       }
       item.querySelector('.assign-btn')?.addEventListener('click', (e) => {
@@ -1615,10 +1649,14 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   });
 
   // Ctrl+V com print de tela (imagem copiada) ou arquivo copiado do explorador — mesmo
-  // caminho de anexo do botão de clipe e do arrastar-e-soltar. Só via clipboardData.items
-  // (não soma com .files, que lista os MESMOS arquivos por outra API — juntar os dois
-  // duplicava o anexo).
-  messageInput.addEventListener('paste', e => {
+  // caminho de anexo do botão de clipe e do arrastar-e-soltar. Ouve na janela inteira (não só
+  // no campo de mensagem): um contador que acabou de clicar numa mensagem antiga pra reler ou
+  // que colou sem focar o campo primeiro não perdia mais o Ctrl+V (achado do Antigravity). Só
+  // via clipboardData.items — não soma com .files (mesmo conteúdo por outra API, duplicava o
+  // anexo) — e só intercepta quando tem arquivo de verdade no clipboard, senão um Ctrl+V de
+  // texto normal (ex. na busca de empresa) continua funcionando do jeito de sempre.
+  window.addEventListener('paste', e => {
+    if (messageInput.disabled) return; // sem empresa selecionada, não tem pra onde anexar
     const arquivosColados = Array.from(e.clipboardData?.items || [])
       .filter(it => it.kind === 'file')
       .map(it => it.getAsFile())
@@ -1627,6 +1665,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     e.preventDefault();
     pendingFiles.push(...arquivosColados);
     renderAttachPreview();
+    messageInput.focus();
   });
 
   function renderAttachPreview() {
@@ -1799,16 +1838,23 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     appendTypingIndicator();
     chatBody.scrollTop = chatBody.scrollHeight;
 
-    typingTimers.push(setTimeout(() => {
-      typingLabelText = 'Ainda trabalhando nisso — relatórios grandes demoram mais...';
-      const label = document.getElementById('typingLabel');
-      if (label) label.textContent = typingLabelText;
-    }, 12000));
-    typingTimers.push(setTimeout(() => {
-      typingLabelText = 'Quase lá, só mais um pouco...';
-      const label = document.getElementById('typingLabel');
-      if (label) label.textContent = typingLabelText;
-    }, 30000));
+    // Passos ao longo do tempo — "quase lá" fixo por muito tempo passava a sensação de
+    // travado em relatórios que legitimamente levam minutos (achado do Antigravity: um
+    // degrau só aos 30s ficava estagnado até 45-65s de resposta real). Nenhuma frase promete
+    // "só mais um pouco" além do que dá pra garantir.
+    const passos = [
+      [12000, 'Ainda trabalhando nisso — relatórios grandes demoram mais...'],
+      [30000, 'Analisando linha a linha do relatório...'],
+      [60000, 'Isso está demorando mais que o normal, mas continua processando — não precisa reenviar.'],
+      [120000, 'Ainda processando — relatórios bem extensos podem levar alguns minutos.'],
+    ];
+    passos.forEach(([ms, texto]) => {
+      typingTimers.push(setTimeout(() => {
+        typingLabelText = texto;
+        const label = document.getElementById('typingLabel');
+        if (label) label.textContent = typingLabelText;
+      }, ms));
+    });
   }
   function hideTyping() {
     typingActive = false;
@@ -1944,11 +1990,32 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   // ---------------- gaveta: Clientes e Fornecedores ----------------
   const cadDrawerOverlay = document.getElementById('cadDrawerOverlay');
   const cadDrawer = document.getElementById('cadDrawer');
-  function openCadDrawer() { cadDrawerOverlay.classList.add('show'); cadDrawer.classList.add('show'); }
+  function openCadDrawer() {
+    cadDrawerOverlay.classList.add('show'); cadDrawer.classList.add('show');
+    // Se já tem uma empresa selecionada no chat, pré-preenche o CNPJ do formulário de
+    // importação com o dela — evita digitar/colar de novo um dado que o app já tem (achado do
+    // Antigravity). Só quando o campo estiver vazio, pra não atropelar o que a pessoa já
+    // tiver digitado numa importação em andamento.
+    const cnpjInput = document.getElementById('cadEmpresaCnpjInput');
+    const emp = activeEmpresaId && empresas.find(e => e.id === activeEmpresaId);
+    if (cnpjInput && !cnpjInput.value && emp && emp.cnpj && window.cadFormatDocumento) {
+      cnpjInput.value = window.cadFormatDocumento(emp.cnpj);
+    }
+  }
   function closeCadDrawer() { cadDrawerOverlay.classList.remove('show'); cadDrawer.classList.remove('show'); }
   document.getElementById('openCadastroBtn').addEventListener('click', openCadDrawer);
   document.getElementById('closeCadDrawerBtn').addEventListener('click', closeCadDrawer);
   cadDrawerOverlay.addEventListener('click', closeCadDrawer);
+
+  function selecionarAbaCadastro(aba) {
+    const consultar = aba === 'consultar';
+    document.getElementById('cadTabConsultarBtn').classList.toggle('active', consultar);
+    document.getElementById('cadTabImportarBtn').classList.toggle('active', !consultar);
+    document.getElementById('cadTabConsultar').hidden = !consultar;
+    document.getElementById('cadTabImportar').hidden = consultar;
+  }
+  document.getElementById('cadTabConsultarBtn').addEventListener('click', () => selecionarAbaCadastro('consultar'));
+  document.getElementById('cadTabImportarBtn').addEventListener('click', () => selecionarAbaCadastro('importar'));
 </script>
 
 <!-- ---------------- Clientes e Fornecedores: mesmo cadastro compartilhado (Firestore
@@ -2320,28 +2387,31 @@ function esperarCadReady() {
     new Promise((_, rej) => setTimeout(() => rej(new Error("não conectou à nuvem do cadastro compartilhado a tempo — tente de novo")), 15000)),
   ]);
 }
-window.cadastroCloud = {
-  // Devolve a Promise do commit — quem chama só pode considerar sucesso depois que ela
-  // resolver de verdade, não só depois de terminar de ler o PDF.
-  async pushManyClientes(obj) {
-    const keys = Object.keys(obj || {}); if (!keys.length) return;
-    await esperarCadReady();
+// Um WriteBatch do Firestore aceita no máximo 500 operações — um relatório de Clientes ou
+// Fornecedores bem extenso (ex.: escritório com milhares de clientes numa única empresa)
+// podia passar disso e derrubar a importação inteira de uma vez (achado do Codex). Divide em
+// pedaços de 400 (folga confortável abaixo do limite) e commita cada um separadamente.
+const CAD_BATCH_TAMANHO = 400;
+async function cadCommitEmLotes(colecao, obj) {
+  const keys = Object.keys(obj || {}); if (!keys.length) return;
+  await esperarCadReady();
+  for (let i = 0; i < keys.length; i += CAD_BATCH_TAMANHO) {
+    const pedaco = keys.slice(i, i + CAD_BATCH_TAMANHO);
     const batch = cadWriteBatch(cadDb);
     // merge:true (não só set()) — o Firestore faz merge recursivo em mapa aninhado ("codigos"),
     // não substitui o documento inteiro. Sem isso, duas pessoas importando o relatório de
     // empresas DIFERENTES ao mesmo tempo para o MESMO fornecedor podiam se sobrescrever: quem
     // salvasse por último apagava o vínculo que o outro tinha acabado de gravar (achado do
     // Codex).
-    keys.forEach((k) => batch.set(cadDoc(cadDb, "clientes", k), obj[k], { merge: true }));
+    pedaco.forEach((k) => batch.set(cadDoc(cadDb, colecao, k), obj[k], { merge: true }));
     await batch.commit();
-  },
-  async pushManyEmpresas(obj) {
-    const keys = Object.keys(obj || {}); if (!keys.length) return;
-    await esperarCadReady();
-    const batch = cadWriteBatch(cadDb);
-    keys.forEach((k) => batch.set(cadDoc(cadDb, "empresas_cricon", k), obj[k], { merge: true }));
-    await batch.commit();
-  },
+  }
+}
+window.cadastroCloud = {
+  // Devolve a Promise do commit — quem chama só pode considerar sucesso depois que ela
+  // resolver de verdade, não só depois de terminar de ler o PDF.
+  pushManyClientes(obj) { return cadCommitEmLotes("clientes", obj); },
+  pushManyEmpresas(obj) { return cadCommitEmLotes("empresas_cricon", obj); },
 };
 </script>
 
