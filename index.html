@@ -275,6 +275,8 @@
     border: none; padding: 0; cursor: pointer; flex-shrink: 0;
   }
   .status-dot-label { font-size: 0.72rem; color: var(--text-dim); }
+  .user-name-row { display: flex; align-items: center; gap: 7px; font-size: 0.85rem; font-weight: 600; color: var(--text); }
+  .user-avatar-emoji { font-size: 1.15rem; line-height: 1; }
   .user-row { display: flex; align-items: center; justify-content: space-between; font-size: 0.76rem; color: var(--text-dim); }
   .user-row button {
     background: none; border: 1px solid var(--panel-border); color: var(--text-dim);
@@ -721,6 +723,10 @@
         <button type="button" class="status-dot" id="statusDot" title="IA conectada — pronta pra processar mensagens" aria-label="Status da IA"></button>
         <span class="status-dot-label" id="statusDotLabel" hidden>IA conectada</span>
       </div>
+      <div class="user-name-row" id="userNameRow" hidden>
+        <span class="user-avatar-emoji" id="userAvatarEmoji"></span>
+        <span id="userNameLabel"></span>
+      </div>
       <div class="user-row">
         <span id="userEmail"></span>
         <button id="logoutBtn">Sair</button>
@@ -917,6 +923,15 @@
     return ADMIN_EMAILS.includes((email || "").trim().toLowerCase());
   }
 
+  // Emoji + nome (mesmo avatar que cada um usa no WhatsApp) mostrado acima do e-mail —
+  // só cosmético, não influencia nada de permissão (isso continua vindo de ADMIN_EMAILS e do
+  // custom claim). Pedido explícito do usuário, mapeado pelo e-mail de login de cada um.
+  const USUARIOS_CONHECIDOS = {
+    "guilherme.primetherapy@gmail.com": { emoji: "🧔🏻", nome: "Guilherme" },
+    "brunanpavei@gmail.com": { emoji: "👩🏼‍🦱", nome: "Bruna" },
+    "criconcontabilidade@gmail.com": { emoji: "👩🏿", nome: "Natali" },
+  };
+
   let currentUserEmail = null;
   let isAdmin = false;
   let unsubEmpresas = null;
@@ -937,6 +952,15 @@
       sincronizarClaimsSeNecessario();
       migrarPadroesSeNecessario();
       userEmail.replaceChildren(document.createTextNode(user.email || ''));
+      const usuarioConhecido = USUARIOS_CONHECIDOS[(user.email || '').trim().toLowerCase()];
+      const userNameRow = document.getElementById('userNameRow');
+      if (usuarioConhecido) {
+        document.getElementById('userAvatarEmoji').textContent = usuarioConhecido.emoji;
+        document.getElementById('userNameLabel').textContent = usuarioConhecido.nome;
+        userNameRow.hidden = false;
+      } else {
+        userNameRow.hidden = true;
+      }
       if (isAdmin) {
         const badge = document.createElement('span');
         badge.className = 'admin-badge';
