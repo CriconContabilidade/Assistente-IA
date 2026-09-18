@@ -121,6 +121,40 @@ const processamento = (id) => banco.get(`assistenteIA_empresas/mv/processamentos
   const r1final = await p1;
   confere('1a chamada termina normalmente', r1final.text === 'Terminei.', r1final.text);
 
+  console.log('\n4b) fencing: tentativa antiga não sobrescreve quem já reassumiu o lease (achado do Codex)');
+  // Simula o caso em que o navegador desistiu (timeout de 280s) e tentou de novo bem na hora
+  // em que o lease "parece" ter expirado, mas a tentativa original ainda está processando de
+  // verdade (não travou, só está demorando) — as duas continuam até o fim, e SEM fencing a
+  // que terminasse por último sobrescrevia o resultado da outra no documento compartilhado.
+  prepararEmpresa();
+  let liberarLenta;
+  const travaLenta = new Promise((res) => { liberarLenta = res; });
+  roteiro = [
+    async () => { await travaLenta; return resp([txt('Terminei devagar.')], 'end_turn'); },
+    resp([txt('Terminei rápido.')], 'end_turn'),
+  ];
+  const pLenta = pedido('primeira tentativa, vai demorar', 'req-fence');
+  await new Promise((r) => setTimeout(r, 20)); // deixa a 1a reservar e pendurar em travaLenta
+
+  // "passa o tempo": marca o lease da 1a tentativa como expirado, simulando os 280s+ que
+  // fariam o navegador desistir e tentar de novo — sem de fato esperar 280s no teste.
+  const docProc = processamento('req-fence');
+  banco.set('assistenteIA_empresas/mv/processamentos/req-fence', {
+    ...docProc,
+    iniciadoEm: { toMillis: () => Date.now() - 400 * 1000 },
+  });
+
+  const rRapida = await pedido('segunda tentativa, reassume o lease', 'req-fence');
+  confere('2a tentativa reassume e termina normal', rRapida.text === 'Terminei rápido.', rRapida.text);
+  const attemptIdDepoisDaRapida = processamento('req-fence').attemptId;
+
+  liberarLenta();
+  const rLentaFinal = await pLenta;
+  confere('1a tentativa (antiga) ainda recebe a PRÓPRIA resposta, não erro', rLentaFinal.text === 'Terminei devagar.', rLentaFinal.text);
+  confere('documento compartilhado continua com o resultado da 2a tentativa (não foi sobrescrito)',
+    processamento('req-fence').text === 'Terminei rápido.', processamento('req-fence'));
+  confere('attemptId no documento não voltou a mudar', processamento('req-fence').attemptId === attemptIdDepoisDaRapida);
+
   console.log('\n5) erro na 1a tentativa marca "failed" e NÃO trava o requestId pra sempre (achado do Codex)');
   prepararEmpresa();
   roteiro = [() => { throw new Error('Anthropic fora do ar'); }];

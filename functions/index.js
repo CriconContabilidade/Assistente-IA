@@ -8,6 +8,7 @@ const ExcelJS = require("exceljs");
 const { initializeApp: initClientApp } = require("firebase/app");
 const { getAuth, signInAnonymously } = require("firebase/auth");
 const { getFirestore: getClientFirestore, doc: clientDoc, getDoc: clientGetDoc, collection: clientCollection, query: clientQuery, where, getDocs, limit: clientLimit } = require("firebase/firestore");
+const { randomUUID } = require("crypto");
 
 initializeApp();
 const db = getFirestore();
@@ -878,29 +879,6 @@ function buildArquivoGerado(spec) {
   };
 }
 
-function findJsonObjectEnd(text, start) {
-  if (text[start] !== "{") return -1;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i++) {
-    const char = text[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === "\\") escaped = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-    if (char === '"') inString = true;
-    else if (char === "{") depth++;
-    else if (char === "}") {
-      depth--;
-      if (depth === 0) return i + 1;
-    }
-  }
-  return -1;
-}
-
 function buildSystemPrompt(empresaNome, notas, documentos, cadastro, fechamento) {
   // Código e CNPJ vêm do cadastro da empresa, preenchido na criação. Quando estão aqui a IA
   // não precisa perguntar nem procurar no banco compartilhado.
@@ -1105,25 +1083,33 @@ exports.assistenteChat = onCall(
     const empresaRef = db.collection("assistenteIA_empresas").doc(empresaId);
     const processamentoRef = requestId ? empresaRef.collection("processamentos").doc(requestId) : null;
     const LEASE_MS = 280 * 1000; // um pouco abaixo do timeout da function (300s)
+    // attemptId: token de posse do lease (fencing). O timeout do navegador (280s) é MENOR que
+    // o da function (300s) de propósito, mas ainda cabe um retry chegar bem em cima da hora: a
+    // tentativa original pode reassumir a "reserva" já como running de novo por causa de outra
+    // pessoa, e as duas ficam processando ao mesmo tempo — sem isso, cada uma podia terminar e
+    // gravar por cima da outra (mensagem duplicada, fechamento/padrão gravado duas vezes,
+    // achado do Codex). Só quem AINDA é dono do attemptId no fim pode gravar o resultado.
+    let meuAttemptId = null;
     if (processamentoRef) {
       const reserva = await db.runTransaction(async (tx) => {
         const snap = await tx.get(processamentoRef);
+        const novoAttemptId = randomUUID();
         if (!snap.exists) {
-          tx.set(processamentoRef, { status: "running", iniciadoEm: FieldValue.serverTimestamp() });
-          return { pode: true };
+          tx.set(processamentoRef, { status: "running", iniciadoEm: FieldValue.serverTimestamp(), attemptId: novoAttemptId });
+          return { pode: true, attemptId: novoAttemptId };
         }
         const dados = snap.data();
         if (dados.status === "completed") return { pode: false, resultado: dados };
         if (dados.status === "failed") {
-          tx.set(processamentoRef, { status: "running", iniciadoEm: FieldValue.serverTimestamp() });
-          return { pode: true };
+          tx.set(processamentoRef, { status: "running", iniciadoEm: FieldValue.serverTimestamp(), attemptId: novoAttemptId });
+          return { pode: true, attemptId: novoAttemptId };
         }
         // status "running": só reassume se o lease anterior já expirou (a chamada original
         // provavelmente travou/caiu sem nunca terminar) — senão, é concorrência de verdade.
         const iniciadoMs = dados.iniciadoEm && dados.iniciadoEm.toMillis ? dados.iniciadoEm.toMillis() : 0;
         if (Date.now() - iniciadoMs > LEASE_MS) {
-          tx.set(processamentoRef, { status: "running", iniciadoEm: FieldValue.serverTimestamp() });
-          return { pode: true };
+          tx.set(processamentoRef, { status: "running", iniciadoEm: FieldValue.serverTimestamp(), attemptId: novoAttemptId });
+          return { pode: true, attemptId: novoAttemptId };
         }
         return { pode: false, aindaProcessando: true };
       });
@@ -1134,6 +1120,7 @@ exports.assistenteChat = onCall(
         }
         throw new HttpsError("already-exists", "Essa mensagem já está sendo processada — aguarde a resposta chegar no chat antes de tentar de novo.");
       }
+      meuAttemptId = reserva.attemptId;
     }
 
     async function processarPedido() {
@@ -1662,62 +1649,20 @@ exports.assistenteChat = onCall(
       return `\n<img src="assets/caminhos/${img.file}" alt="${img.alt}" style="max-width:100%;border-radius:8px;margin:6px 0;display:block;">`;
     });
 
-    // ---- compatibilidade: tags antigas ----
-    // As ações agora são ferramentas, mas a IA ainda pode escrever uma tag por hábito (as
-    // conversas antigas estão cheias delas). Em vez de deixar vazar texto cru na tela, as
-    // tags de ação continuam sendo executadas do mesmo jeito que as ferramentas.
-    const extrairTags = (marca, aoEncontrar) => {
-      let desde = 0;
-      while (true) {
-        const ini = text.indexOf(marca, desde);
-        if (ini === -1) return;
-        const jsonIni = ini + marca.length;
-        const jsonFim = findJsonObjectEnd(text, jsonIni);
-        if (jsonFim === -1) {
-          text = text.slice(0, ini).trim();
-          return;
-        }
-        let fim = jsonFim;
-        while (fim < text.length && fim < jsonFim + 2 && text[fim] === "}") fim++;
-        const bruto = text.slice(jsonIni, jsonFim);
-        text = text.replace(text.slice(ini, fim), "").trim();
-        aoEncontrar(bruto);
-        desde = 0;
-      }
-    };
-    const pendentes = [];
-    extrairTags("{{GERAR_ARQUIVO:", (bruto) => {
-      try {
-        gerarArquivo(JSON.parse(bruto));
-      } catch (err) {
-        console.error("Erro processando tag GERAR_ARQUIVO:", err, bruto);
-        errosGeracao.push(err && err.message ? err.message : "dados inválidos");
-      }
-    });
-    extrairTags("{{FECHAMENTO:", (bruto) => {
-      pendentes.push(Promise.resolve()
-        .then(() => registrarFechamento(JSON.parse(bruto)))
-        .catch((err) => console.error("Erro processando tag FECHAMENTO:", err, bruto)));
-    });
-    await Promise.all(pendentes);
-    const tagCadastro = text.match(/\{\{CHECK_ENTIDADES:(\[[\s\S]*?\])\}\}/);
-    text = text.replace(/\{\{CHECK_ENTIDADES:[\s\S]*?\}\}/g, "").trim();
-    if (tagCadastro) {
-      try {
-        const r = await verificarCadastro(JSON.parse(tagCadastro[1]));
-        const avisos = [];
-        if (r.faltando.length > 0) {
-          avisos.push(`Não encontrei no cadastro compartilhado: ${r.faltando.join(", ")}. Pode me passar o CNPJ de cada um, ou mandar o Cadastro de Fornecedores/Clientes (só precisa incluir quem faltou)?`);
-        }
-        if (!r.empresaEncontrada) {
-          avisos.push(`Também não achei "${empresa.nome}" cadastrada com código/CNPJ no Domínio — pode me passar esses dois dados?`);
-        }
-        if (avisos.length > 0) text += `\n\n⚠️ ${avisos.join("\n\n⚠️ ")}`;
-      } catch (err) {
-        console.error("Erro processando tag CHECK_ENTIDADES:", err, tagCadastro[1]);
-      }
+    // ---- tags antigas: só limpa, não executa mais ----
+    // As ações são ferramentas (tool_use) há tempos — isso aqui era um fallback de quando a
+    // IA ainda escrevia tags de texto ({{GERAR_ARQUIVO:...}}, {{FECHAMENTO:...}} etc.) pra
+    // disparar ações, de um jeito que EXECUTAVA qualquer coisa que batesse com o padrão de
+    // texto, sem o schema/validação que tool_use tem — um segundo caminho de efeito
+    // persistente bem mais frágil de testar (achado do Codex), e sem uso real nos logs
+    // recentes. Continua só limpando a tag da tela (pra não vazar texto cru se a IA escrever
+    // uma por hábito) — não executa mais nada a partir daqui.
+    const TAGS_ANTIGAS = ["GERAR_ARQUIVO", "FECHAMENTO", "CHECK_ENTIDADES", "BUSCAR_ARQUIVO"];
+    for (const tag of TAGS_ANTIGAS) {
+      const antes = text;
+      text = text.replace(new RegExp(`\\{\\{${tag}:[\\s\\S]*?\\}\\}`, "g"), "").trim();
+      if (text !== antes) console.warn(`Tag antiga "{{${tag}:...}}" apareceu na resposta e foi só removida (não executa mais) — verificar se o prompt precisa reforçar o uso da ferramenta.`);
     }
-    text = text.replace(/\{\{BUSCAR_ARQUIVO:[^}]*\}\}/g, "").trim();
 
     // Se nenhum arquivo saiu e houve erro, avisa — a IA já recebeu o erro e costuma explicar,
     // mas o aviso garante que ninguém fique esperando um arquivo que não existe.
@@ -1784,28 +1729,39 @@ exports.assistenteChat = onCall(
     return { text, usage: response.usage || null, arquivosGerados };
     }
 
+    // Só grava se o attemptId no documento ainda for o mesmo que eu reservei — se outra
+    // tentativa já reassumiu o lease (porque achou que eu tinha travado), gravar por cima
+    // agora seria sobrescrever o trabalho de quem já é dono da vez.
+    async function gravarSeAindaSouDono(dados) {
+      if (!processamentoRef) return;
+      await db.runTransaction(async (tx) => {
+        const snap = await tx.get(processamentoRef);
+        if (snap.exists && snap.data().attemptId !== meuAttemptId) {
+          log(`attemptId não bate mais (outra tentativa assumiu o lease) — não grava ${dados.status}`);
+          return;
+        }
+        tx.set(processamentoRef, dados, { merge: true });
+      });
+    }
+
     try {
       const resultado = await processarPedido();
-      if (processamentoRef) {
-        await processamentoRef.set({
-          status: "completed",
-          text: resultado.text,
-          arquivosGerados: arquivosGeradosParaGravar(resultado.arquivosGerados || []),
-          concluidoEm: FieldValue.serverTimestamp(),
-        }, { merge: true });
-      }
+      await gravarSeAindaSouDono({
+        status: "completed",
+        text: resultado.text,
+        arquivosGerados: arquivosGeradosParaGravar(resultado.arquivosGerados || []),
+        concluidoEm: FieldValue.serverTimestamp(),
+      });
       return resultado;
     } catch (err) {
       // Marca como "failed" (não deixa o requestId travado pra sempre) e deixa o erro subir
       // igual sempre subiu — quem trata isso do lado de fora (HttpsError -> resposta pro
       // navegador) continua exatamente igual.
-      if (processamentoRef) {
-        await processamentoRef.set({
-          status: "failed",
-          erro: (err && err.message) || "erro desconhecido",
-          falhouEm: FieldValue.serverTimestamp(),
-        }, { merge: true }).catch(() => {});
-      }
+      await gravarSeAindaSouDono({
+        status: "failed",
+        erro: (err && err.message) || "erro desconhecido",
+        falhouEm: FieldValue.serverTimestamp(),
+      }).catch(() => {});
       throw err;
     }
   }

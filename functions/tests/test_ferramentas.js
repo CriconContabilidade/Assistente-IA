@@ -219,13 +219,13 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
   ];
   await pedido('reabre o extrato');
 
-  console.log('\n6) tag antiga por hábito ainda funciona e não vaza');
+  console.log('\n6) tag antiga por hábito não vaza pra tela, mas também não executa mais (achado do Codex: segundo caminho de execução sem o schema/validação do tool_use)');
   prepararEmpresa();
   roteiro = [resp([txt('Segue.\n{{GERAR_ARQUIVO:{"tipo":"lanctos","linhas":[{"data":"10/08/2026","debito":"1","credito":"2","valor":5}]}}}\n{{FECHAMENTO:{"competencia":"09/2026","pendencias":0}}}')], 'end_turn')];
   r = await pedido('gera');
-  confere('arquivo gerado pela tag', r.arquivosGerados.length === 1);
-  confere('nenhuma tag no texto', !r.text.includes('{{'), JSON.stringify(r.text));
-  confere('fechamento 09/2026 criado pela tag', !!banco.get('assistenteIA_empresas/mv/fechamentos/2026-09'));
+  confere('não gera arquivo nenhum a partir da tag (só ferramenta gera)', r.arquivosGerados.length === 0);
+  confere('nenhuma tag crua no texto', !r.text.includes('{{'), JSON.stringify(r.text));
+  confere('fechamento NÃO é criado pela tag (só ferramenta grava)', !banco.get('assistenteIA_empresas/mv/fechamentos/2026-09'));
 
   console.log('\n7) conversa sem ferramenta');
   prepararEmpresa();

@@ -10,7 +10,7 @@ function recorta(inicio, fim) {
 const TEXT_MEDIA_TYPES = new Set(["text/plain", "text/csv", "application/csv", "application/x-ofx", "text/ofx"]);
 const trecho = [
   recorta('function decodificarTexto', '// Converte um arquivo anexado'),
-  recorta('function cellToString', 'function findJsonObjectEnd'),
+  recorta('function cellToString', 'function buildSystemPrompt'),
 ].join('\n');
 const m = { exports: {} };
 new Function('module', 'require', 'TEXT_MEDIA_TYPES', 'SPREADSHEET_MEDIA_TYPES', 'IMAGE_MEDIA_TYPES', 'xlsxBufferToText',

@@ -30,7 +30,7 @@ confere('string vazia dá erro, não vira 0', testa('').erro, 'Campo obrigatóri
 const a2 = src.indexOf('function decodificarTexto');
 const b2 = src.indexOf('// Converte um arquivo anexado');
 const a3 = src.indexOf('function cellToString');
-const b3 = src.indexOf('function findJsonObjectEnd');
+const b3 = src.indexOf('function buildSystemPrompt');
 const trecho = [src.slice(a2, b2), src.slice(a3, b3)].join('\n');
 const m2 = { exports: {} };
 new Function('module', 'require', 'TEXT_MEDIA_TYPES', 'SPREADSHEET_MEDIA_TYPES', 'IMAGE_MEDIA_TYPES', 'xlsxBufferToText',
