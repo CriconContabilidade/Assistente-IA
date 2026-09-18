@@ -614,6 +614,12 @@ function buildBaixaLines(linhas, tipo, avisos) {
   return linhas.map((l, index) => {
     const base = [
       campoEstruturalTxt(l.numero, `número do título da linha ${index + 1}`, true),
+      // Baixa de Serviços dá baixa num título nascido de uma Nota Fiscal (ServicoPrest.txt,
+      // que sempre leva "série" — "U" por padrão) — sem a série aqui, o Domínio não localiza o
+      // título certo pela combinação número+série, e todo campo depois dela desalinha uma
+      // posição pro lado (achado em uso real: "Data de Baixa" recebendo o valor do lançamento,
+      // e o lançamento saindo com "Conta cliente" e valor zerados por não achar o título).
+      ...(tipo === "baixa_ser" ? [campoEstruturalTxt(l.serie || "U", `série da linha ${index + 1}`, true)] : []),
       documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`, false, avisos),
       dataTxt(l.vencimento, `vencimento da linha ${index + 1}`, false),
       dataTxt(l.databaixa, `data da baixa da linha ${index + 1}`),
@@ -1035,7 +1041,8 @@ Convenções gerais de todos os TXT: separador ";", quebra de linha CRLF (inclus
 - Lançamentos → "lanctos.txt". Colunas nesta ordem: Data (DD/MM/AAAA); Débito; Crédito; Valor; Cód. Hist. (geralmente vazio); Complemento/Histórico (sem acento); Inicia Lote; Código Emp.; Centro de Custo Débito; Centro de Custo Crédito.
   INICIA LOTE — regra importante (o Domínio não tem marcador de "fim de lote": sem o "1" separando, ele emenda um lançamento no outro, virando tudo um lançamento só): toda linha que tem DÉBITO E CRÉDITO preenchidos na própria linha (lançamento simples) leva "iniciaLote": "1" — SEMPRE, mesmo fora de partida múltipla (o sistema já corrige sozinho se você esquecer, mas prefira já mandar certo). Só fica vazio numa linha de CONTINUAÇÃO de partida múltipla, ou seja, uma linha que tem só débito OU só crédito preenchido (nunca os dois) e vem logo depois da linha que abriu aquele lote com "1".
 - Baixa de Entradas (fornecedor) → "baixa_ent.txt". Colunas: número do título; CNPJ/CPF (só dígitos); vencimento (DD/MM/AAAA); data da baixa (DD/MM/AAAA); valor pago; juros; multa; desconto.
-- Baixa de Saídas e Baixa de Serviços (cliente) → "baixa_sai.txt" / "baixa_ser.txt" (mesmo layout, só muda o nome do arquivo). Colunas: número do título; CNPJ/CPF; vencimento; data da baixa; valor recebido; juros; multa; desconto; PIS; COFINS; CSLL; IRRF.
+- Baixa de Saídas → "baixa_sai.txt". Colunas: número do título; CNPJ/CPF; vencimento; data da baixa; valor recebido; juros; multa; desconto; PIS; COFINS; CSLL; IRRF.
+- Baixa de Serviços → "baixa_ser.txt". MESMO layout da Baixa de Saídas, só que com "série" logo depois do número do título (o título de Baixa de Serviços nasce de uma Nota Fiscal — ServicoPrest.txt —, que sempre leva série; sem ela aqui o Domínio não localiza o título certo e tudo desalinha). Colunas: número do título; série ("U" se não souber outra — mesmo padrão do ServicoPrest.txt); CNPJ/CPF; vencimento; data da baixa; valor recebido; juros; multa; desconto; PIS; COFINS; CSLL; IRRF.
 - Nota Fiscal de Serviço → "ServicoPrest.txt". 28 colunas nesta ordem: CPF/CNPJ; Razão Social; UF; Município; Endereço; Número Documento; Série (use "U"); Data; Situação (0); Acumulador (1); CFPS (9101); Valor Serviços; Valor Descontos; Valor Dedução; Valor Contábil (= Valor Serviços); Base de Cálculo; Alíquota ISS; Valor ISS Normal; Valor ISS Retido; Valor IRRF; Valor PIS; Valor COFINS; Valor CSLL; Valor CRF; Valor INSS; Código do Item; Quantidade; Valor Unitário (as colunas sem valor conhecido ficam vazias, não zero, exceto onde indicado).
 - Layout de Nota Fiscal de Entrada e de Saída (mercadoria) ainda não foi confirmado em nenhuma ferramenta do escritório — se precisar gerar um desses, avise o usuário que precisa de um arquivo-modelo antes de montar o layout, nunca invente.
 - Movimento bancário direto do extrato (menos comum, layout de largura fixa byte a byte, específico por empresa nos códigos de conta) — a geração automática desse tipo ainda NÃO está disponível (a ferramenta gerar_arquivo não gera esse tipo); se o usuário pedir esse formato, explique o layout em texto e avise que a geração automática desse tipo específico ainda não foi implementada.
