@@ -1514,6 +1514,21 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     }
   });
 
+  // Ctrl+V com print de tela (imagem copiada) ou arquivo copiado do explorador — mesmo
+  // caminho de anexo do botão de clipe e do arrastar-e-soltar. Só via clipboardData.items
+  // (não soma com .files, que lista os MESMOS arquivos por outra API — juntar os dois
+  // duplicava o anexo).
+  messageInput.addEventListener('paste', e => {
+    const arquivosColados = Array.from(e.clipboardData?.items || [])
+      .filter(it => it.kind === 'file')
+      .map(it => it.getAsFile())
+      .filter(Boolean);
+    if (!arquivosColados.length) return;
+    e.preventDefault();
+    pendingFiles.push(...arquivosColados);
+    renderAttachPreview();
+  });
+
   function renderAttachPreview() {
     attachPreview.innerHTML = "";
     pendingFiles.forEach((f, i) => {
