@@ -91,6 +91,11 @@ async function carregarClientesParaBuscaPorNome() {
 // bate com UM SÓ registro — mais de um bater (ex. "MV" batendo em vários nomes) é ambíguo
 // demais pra escolher sozinho, e escolher errado silenciosamente é pior que dizer "não achei"
 // (achado do Codex: find() pegava o primeiro que batesse, podia confirmar a empresa errada).
+// Devolve { achado } quando bate com um SÓ registro (usa direto, sem perguntar nada — mais de
+// um bater e escolher sozinho seria arriscado, achado do Codex), { candidatos: [...] } quando
+// bate com mais de um (pede pro usuário CONFIRMAR qual é, em vez de já pedir o CNPJ do zero —
+// pedido explícito do usuário: procurar pelo nome/iniciais antes de perguntar), ou null quando
+// não bate com nada, nem por aproximação.
 async function lookupEntidadePorNome(nome) {
   const alvo = stripAccentsJs(String(nome || "")).toUpperCase().trim();
   if (!alvo || alvo.length < 3) return null;
@@ -99,9 +104,12 @@ async function lookupEntidadePorNome(nome) {
     const razao = stripAccentsJs(String(r.razao_social || "")).toUpperCase();
     return razao && (razao.includes(alvo) || alvo.includes(razao));
   });
-  if (candidatos.length === 1) return candidatos[0];
+  if (candidatos.length === 1) return { achado: candidatos[0] };
   if (candidatos.length > 1) {
-    console.log(`verificar_cadastro: "${nome}" bateu com ${candidatos.length} registros por nome (ambíguo, não escolhendo nenhum): ${candidatos.map((c) => c.razao_social).join(" | ")}`);
+    console.log(`verificar_cadastro: "${nome}" bateu com ${candidatos.length} registros por nome (ambíguo, pedindo confirmação): ${candidatos.map((c) => c.razao_social).join(" | ")}`);
+    // Limita a lista mostrada — muitos candidatos geralmente é o termo de busca curto/genérico
+    // demais pra servir de sugestão útil (ex. "PIX"), não um caso real de nome parecido.
+    if (candidatos.length <= 5) return { candidatos };
   }
   return null;
 }
@@ -776,7 +784,7 @@ const FERRAMENTAS = [
   },
   {
     name: "verificar_cadastro",
-    description: "Confere fornecedores/clientes contra o cadastro compartilhado do escritório (o mesmo das outras ferramentas do Hub) e informa se a empresa atual tem código e CNPJ do Domínio. Use ao processar Contas a Pagar ou Contas a Receber, com todos os fornecedores/clientes distintos do relatório. Só peça ao usuário os dados de quem NÃO for encontrado — nunca o relatório de cadastro inteiro.",
+    description: "Confere fornecedores/clientes contra o cadastro compartilhado do escritório (o mesmo das outras ferramentas do Hub) e informa se a empresa atual tem código e CNPJ do Domínio. Use ao processar Contas a Pagar ou Contas a Receber, com todos os fornecedores/clientes distintos do relatório — mesmo sem saber o CNPJ, sempre tente com o nome (a busca já procura por aproximação sozinha). Se a resposta disser que bateu com mais de um nome parecido, mostre as opções e peça ao usuário só para CONFIRMAR qual é (não peça o CNPJ do zero nesse caso). Só peça o CNPJ direto quando a resposta disser que não achou nada, nem por aproximação — nunca peça o relatório de cadastro inteiro.",
     input_schema: {
       type: "object",
       properties: {
@@ -793,6 +801,17 @@ const FERRAMENTAS = [
         },
       },
       required: ["entidades"],
+    },
+  },
+  {
+    name: "salvar_codigo_cnpj_empresa",
+    description: "Grava o código no Domínio e/ou o CNPJ desta empresa quando o usuário informar (ex.: respondendo ao aviso de verificar_cadastro de que a empresa não tem esses dados). Chame assim que o usuário der esse dado — sem isso, a próxima mensagem esquece e pergunta nulo de novo, porque esses dados não ficam guardados só na conversa. Pode mandar só um dos dois se só um foi informado.",
+    input_schema: {
+      type: "object",
+      properties: {
+        codigo: { type: "string", description: "Código da empresa no Domínio (só números)" },
+        cnpj: { type: "string", description: "CNPJ da empresa (com ou sem máscara — normaliza sozinho)" },
+      },
     },
   },
   {
@@ -975,7 +994,7 @@ MODO DE CONFIGURAÇÃO INICIAL DA EMPRESA: quando o usuário mandar de uma vez o
 - Durante a configuração inicial, pergunte também: (1) qual o regime tributário da empresa (Lucro Presumido, Simples Nacional, Lucro Real)?; (2) é um escritório de advocacia? Guarde as respostas como observação permanente da empresa — isso muda como alguns lançamentos são tratados (aplicação financeira, custas processuais), conforme as seções abaixo.
 - Depois que o usuário mandar todos os relatórios iniciais necessários (ou disser que não tem mais nenhum), pergunte exatamente isto: "Existe mais algum relatório que o cliente envia para auxiliar na minha conciliação dos lançamentos?"
 - O Cadastro de Fornecedores e Clientes é compartilhado entre TODAS as empresas do escritório (é o mesmo banco usado por outras ferramentas do Hub) — NÃO peça esse relatório por padrão quando receber Contas a Pagar/Receber. Em vez disso, quando processar um relatório de Contas a Pagar ou Contas a Receber, chame a ferramenta verificar_cadastro com todos os fornecedores/clientes distintos mencionados. Ela responde na hora quem não está no cadastro compartilhado — só peça informação ao usuário sobre esses que faltaram, nunca o relatório inteiro de cadastro de cara.
-- O Código e CNPJ da própria empresa também é um dado compartilhado — não peça isso por padrão. A ferramenta verificar_cadastro informa se a empresa tem esses dados.
+- O Código e CNPJ da própria empresa também é um dado compartilhado — não peça isso por padrão. A ferramenta verificar_cadastro informa se a empresa tem esses dados. Assim que o usuário informar (ou verificar_cadastro achar pelo nome no cadastro compartilhado), chame salvar_codigo_cnpj_empresa na hora — sem isso, os dados NÃO ficam guardados de verdade, e a próxima mensagem (ou até a mesma conversa mais adiante) esquece e pergunta tudo de novo. Nunca deixe esse dado só na conversa.
 
 PROCESSO DE CONCILIAÇÃO (extrato × Contas a Receber/Pagar × Diário) — sempre que tiver o extrato bancário junto com Contas a Receber e/ou Contas a Pagar da mesma empresa (no pacote inicial ou depois), siga esta ordem, do mesmo jeito que já é feito nas outras empresas do escritório:
 1. Primeiro, tente ligar automaticamente cada recebimento do extrato a uma ou mais parcelas em aberto do Contas a Receber (por valor e data), e cada pagamento do extrato a uma ou mais parcelas do Contas a Pagar. Preste atenção especial a lançamentos que juntam várias notas fiscais num só valor do extrato (baixa em lote/lançamento composto) — nesse caso, identifique todas as NFs que compõem aquele valor antes de considerar a ligação feita.
@@ -1376,8 +1395,7 @@ exports.assistenteChat = onCall(
             }
           }
           try {
-            const porNome = await lookupEntidadePorNome(e.nome);
-            return { achado: porNome };
+            return (await lookupEntidadePorNome(e.nome)) || {};
           } catch (err) {
             console.error(`verificar_cadastro: erro buscando "${e.nome}" por nome:`, err);
             return { indisponivel: true };
@@ -1388,10 +1406,12 @@ exports.assistenteChat = onCall(
       const encontrados = [];
       const faltando = [];
       const indisponiveis = [];
+      const possiveis = []; // { nome, opcoes: [razao_social, ...] } — bateu com mais de um, pede confirmação
       validas.forEach((e, i) => {
         const r = achados[i];
         if (r.achado) encontrados.push(String(e.nome));
         else if (r.indisponivel) indisponiveis.push(String(e.nome));
+        else if (r.candidatos) possiveis.push({ nome: String(e.nome), opcoes: r.candidatos.map((c) => c.razao_social) });
         else faltando.push(String(e.nome));
       });
       const cnpjEmpresa = normalizarDocumento(empresa.cnpj);
@@ -1399,16 +1419,25 @@ exports.assistenteChat = onCall(
         ? { codigo: empresa.codigoDominio, cnpj: cnpjEmpresa }
         : null;
       let empresaIndisponivel = false;
+      let empresaAchadaViaCadastroCompartilhado = false;
       if (!empresaEncontrada) {
         try {
           const doBanco = await lookupEmpresa(empresa.nome);
-          if (doBanco) empresaEncontrada = { codigo: doBanco.codigo, cnpj: doBanco.cnpj || doBanco.documento };
+          if (doBanco) {
+            empresaEncontrada = { codigo: doBanco.codigo, cnpj: doBanco.cnpj || doBanco.documento };
+            // Achado pelo NOME no cadastro compartilhado (não é leitura garantida — o nome da
+            // empresa aqui pode não bater exatamente com o de lá) — ainda não está salvo no
+            // cadastro desta empresa, então sem persistir agora a IA teria que reencontrar de
+            // novo (e nem sempre bate) toda vez, perguntando ao usuário sem necessidade
+            // (achado em uso real).
+            empresaAchadaViaCadastroCompartilhado = true;
+          }
         } catch (err) {
           console.error("Erro consultando empresa no cadastro compartilhado:", err);
           empresaIndisponivel = true;
         }
       }
-      return { encontrados, faltando, indisponiveis, empresaEncontrada, empresaIndisponivel };
+      return { encontrados, faltando, indisponiveis, possiveis, empresaEncontrada, empresaIndisponivel, empresaAchadaViaCadastroCompartilhado };
     }
 
     // ---------------- padrões de lançamento estruturados (item 2 da Fase 3) ----------------
@@ -1572,23 +1601,49 @@ exports.assistenteChat = onCall(
           await registrarFechamento(entrada);
           return { content: "Painel do fechamento atualizado." };
         }
+        if (nome === "salvar_codigo_cnpj_empresa") {
+          const codigoBruto = entrada && entrada.codigo != null ? String(entrada.codigo).replace(/\D/g, "") : "";
+          const cnpjBruto = entrada && entrada.cnpj != null ? normalizarDocumento(entrada.cnpj) : "";
+          if (!codigoBruto && !cnpjBruto) {
+            return { content: "Nenhum código ou CNPJ válido foi informado — nada foi salvo.", is_error: true };
+          }
+          const dados = {};
+          if (codigoBruto) dados.codigoDominio = codigoBruto;
+          if (cnpjBruto) dados.cnpj = cnpjBruto;
+          await empresaRef.set(dados, { merge: true });
+          // Atualiza também em memória — sem isso, uma chamada a verificar_cadastro mais
+          // adiante NA MESMA conversa (mesma rodada de ferramentas ou uma seguinte) ainda veria
+          // os dados velhos, porque "empresa" foi carregado uma vez só no início da mensagem.
+          Object.assign(empresa, dados);
+          log(`código/CNPJ da empresa salvo: ${JSON.stringify(dados)}`);
+          return { content: `Salvo: ${[codigoBruto && `código ${codigoBruto}`, cnpjBruto && `CNPJ ${cnpjBruto}`].filter(Boolean).join(", ")}. Não precisa perguntar de novo — já fica gravado pra sempre.` };
+        }
         if (nome === "verificar_cadastro") {
           log(`verificar_cadastro chamado com: ${JSON.stringify(entrada && entrada.entidades)}`);
           const r = await verificarCadastro(entrada && entrada.entidades);
           const partes = [];
-          if (r.faltando.length) partes.push(`NÃO encontrados no cadastro compartilhado: ${r.faltando.join(", ")} — peça ao usuário o CNPJ de cada um (ou o Cadastro de Fornecedores/Clientes só com esses).`);
+          if (r.faltando.length) partes.push(`NÃO encontrados no cadastro compartilhado, nem por aproximação de nome: ${r.faltando.join(", ")} — peça ao usuário o CNPJ de cada um (ou o Cadastro de Fornecedores/Clientes só com esses).`);
           if (r.encontrados.length) partes.push(`Encontrados: ${r.encontrados.join(", ")}.`);
+          // Bateu com mais de um nome parecido — em vez de já pedir o CNPJ do zero, mostra as
+          // opções e deixa o usuário só CONFIRMAR qual é (pedido explícito do usuário: procurar
+          // pelo nome/iniciais antes de perguntar).
+          if (r.possiveis.length) {
+            partes.push(r.possiveis.map((p) => `"${p.nome}" pode ser um destes já cadastrados: ${p.opcoes.join(" / ")} — confirme com o usuário qual é (ou se não é nenhum, peça o CNPJ) antes de seguir.`).join(" "));
+          }
           // Indisponível é diferente de "não encontrado" — o cadastro compartilhado deu erro
           // (rede, projeto fora do ar), não é que o fornecedor não existe. Nunca afirme ao
           // usuário que não está cadastrado nesse caso (achado do Codex).
           if (r.indisponiveis.length) partes.push(`Não consegui consultar o cadastro compartilhado agora pra: ${r.indisponiveis.join(", ")} (erro de conexão, não é que não está cadastrado) — tente de novo em instantes, ou pergunte o CNPJ direto ao usuário se for urgente.`);
-          if (!r.faltando.length && !r.indisponiveis.length) partes.unshift("Todos foram encontrados no cadastro compartilhado.");
+          if (!r.faltando.length && !r.indisponiveis.length && !r.possiveis.length) partes.unshift("Todos foram encontrados no cadastro compartilhado.");
           if (r.empresaIndisponivel) {
             partes.push(`Também não consegui consultar o cadastro da própria empresa "${empresa.nome}" agora (erro de conexão) — tente de novo antes de concluir que ela não tem código/CNPJ.`);
+          } else if (r.empresaEncontrada) {
+            const sufixo = r.empresaAchadaViaCadastroCompartilhado
+              ? " Isso ainda não está salvo pra esta empresa — chame salvar_codigo_cnpj_empresa agora com esses dois dados pra não precisar procurar de novo depois."
+              : "";
+            partes.push(`Empresa ${empresa.nome}: código ${r.empresaEncontrada.codigo}, CNPJ ${r.empresaEncontrada.cnpj}.${sufixo}`);
           } else {
-            partes.push(r.empresaEncontrada
-              ? `Empresa ${empresa.nome}: código ${r.empresaEncontrada.codigo}, CNPJ ${r.empresaEncontrada.cnpj}.`
-              : `A empresa "${empresa.nome}" não tem código e CNPJ do Domínio cadastrados — peça esses dois dados ao usuário.`);
+            partes.push(`A empresa "${empresa.nome}" não tem código e CNPJ do Domínio cadastrados — peça esses dois dados ao usuário e chame salvar_codigo_cnpj_empresa assim que ele responder.`);
           }
           return { content: partes.join(" ") };
         }

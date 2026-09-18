@@ -83,7 +83,12 @@ const falsos = {
   'firebase/app': { initializeApp: () => ({}) },
   'firebase/auth': { getAuth: () => ({}), signInAnonymously: async () => ({}) },
   'firebase/firestore': {
-    getFirestore: () => ({}), collection: () => ({}), query: () => ({}),
+    getFirestore: () => ({}),
+    // collection() carrega o nome pra getDocs saber qual coleção simulada devolver — sem isso,
+    // uma consulta em "empresas_cricon" (lookupEmpresa) acabava lendo o mesmo fixture de
+    // "clientes" (clientesCompartilhados) por engano, misturando os dois cadastros no teste.
+    collection: (_db, nome) => ({ __col: nome }),
+    query: (colRef) => colRef, // mock não filtra de verdade — where/limit só preservam __col
     where: () => ({}), limit: () => ({}),
     // cadastro compartilhado: só o CNPJ do BB existe. O id vai DENTRO da referência (não numa
     // variável global) pra funcionar certo com consultas em paralelo (Promise.all) — uma
@@ -94,11 +99,13 @@ const falsos = {
       if (cibeleIndisponivel) throw new Error('cadastro compartilhado fora do ar (simulado)');
       return { exists: () => ref.id === '43617343000102', data: () => ({}) };
     },
-    // clientesCompartilhados simula a coleção inteira "clientes" (usada pelo fallback de
-    // busca por nome quando não tem CNPJ) — vazia por padrão, um cenário específico enche ela.
-    getDocs: async () => {
+    // clientesCompartilhados simula "clientes" (fallback de busca por nome sem CNPJ);
+    // empresasCriconCompartilhadas simula "empresas_cricon" (código/CNPJ da própria empresa) —
+    // coleções separadas, cada uma vazia por padrão até um cenário específico encher.
+    getDocs: async (ref) => {
       if (cibeleIndisponivel) throw new Error('cadastro compartilhado fora do ar (simulado)');
-      return { empty: clientesCompartilhados.length === 0, docs: clientesCompartilhados.map((c) => ({ data: () => c })) };
+      const lista = ref && ref.__col === 'empresas_cricon' ? empresasCriconCompartilhadas : clientesCompartilhados;
+      return { empty: lista.length === 0, docs: lista.map((c) => ({ data: () => c })) };
     },
   },
 };
@@ -106,7 +113,12 @@ const falsos = {
 // coleção em memória por alguns minutos (produção: evita rebaixar milhares de docs a cada
 // ferramenta chamada na mesma conversa) — setar isso só depois do primeiro uso não teria
 // efeito nos testes seguintes, igual não teria numa conversa de verdade.
-let clientesCompartilhados = [{ razao_social: 'MONLOTE URBANIZADORA LTDA', documento: '59888185000165', tipo: 'CNPJ' }];
+let clientesCompartilhados = [
+  { razao_social: 'MONLOTE URBANIZADORA LTDA', documento: '59888185000165', tipo: 'CNPJ' },
+  { razao_social: 'MARIA SILVA CONSULTORIA LTDA', documento: '11111111000111', tipo: 'CNPJ' },
+  { razao_social: 'JOSE SILVA TRANSPORTES LTDA', documento: '22222222000122', tipo: 'CNPJ' },
+];
+let empresasCriconCompartilhadas = [];
 let cibeleIndisponivel = false;
 const fsFalso = falsos['firebase/firestore'];
 const carregarOriginal = Module._load;
@@ -145,7 +157,7 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
   let r = await pedido('gera os lançamentos');
   confere('um arquivo gerado', r.arquivosGerados.length === 1 && r.arquivosGerados[0].nome === 'lanctos.txt');
   confere('texto final certo', r.text === 'Aqui está o arquivo, revise antes de importar.', r.text);
-  confere('ferramentas enviadas na chamada', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(',') === 'gerar_arquivo,buscar_arquivo,atualizar_fechamento,verificar_cadastro,consultar_padrao,salvar_padrao', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(','));
+  confere('ferramentas enviadas na chamada', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(',') === 'gerar_arquivo,buscar_arquivo,atualizar_fechamento,verificar_cadastro,salvar_codigo_cnpj_empresa,consultar_padrao,salvar_padrao', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(','));
   const seg = chamadas[1].messages;
   const resultado = seg[seg.length - 1].content[0];
   confere('2a chamada leva tool_use e tool_result com o mesmo id',
@@ -224,6 +236,47 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
   ];
   await pedido('confere fornecedor com a nuvem fora do ar');
   cibeleIndisponivel = false;
+
+  console.log('\n4d) bate com mais de um nome parecido -> pede confirmação em vez de já pedir CNPJ (pedido do usuário)');
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('verificar_cadastro', { entidades: [{ nome: 'Silva' }] })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('não confirma nenhum sozinho, mostra as opções', res.content.includes('MARIA SILVA CONSULTORIA LTDA') && res.content.includes('JOSE SILVA TRANSPORTES LTDA'), res.content);
+      confere('pede confirmação, não CNPJ do zero', res.content.includes('confirme') && !res.content.includes('NÃO encontrados'), res.content);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('confere fornecedor Silva');
+
+  console.log('\n4e) salvar_codigo_cnpj_empresa grava e fica disponível na mesma conversa (achado em uso real: IA esquecia e perguntava de novo)');
+  banco.clear();
+  banco.set('assistenteIA_empresas/mv', { nome: 'MV', notas: [], responsavelEmail: '' }); // sem codigoDominio/cnpj, de propósito
+  banco.set('assistenteIA_empresas/mv/fechamentos/2026-08', { competencia: '08/2026', relatorios: ['extrato'] });
+  chamadas.length = 0;
+  roteiro = [
+    resp([uso('verificar_cadastro', { entidades: [] })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('avisa que a empresa não tem código/CNPJ ainda', res.content.includes('não tem código e CNPJ'), res.content);
+      return resp([uso('salvar_codigo_cnpj_empresa', { codigo: '185', cnpj: '21.208.224/0001-63' })], 'tool_use');
+    },
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('salva sem erro', !res.is_error, res.content);
+      return resp([uso('verificar_cadastro', { entidades: [] })], 'tool_use');
+    },
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('já enxerga o código/CNPJ na MESMA conversa, sem reler o Firestore', res.content.includes('código 185') && res.content.includes('CNPJ 21208224000163'), res.content);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('informa o codigo e cnpj da empresa');
+  confere('ficou gravado de verdade no Firestore (sobrevive a nova conversa)',
+    banco.get('assistenteIA_empresas/mv').codigoDominio === '185' && banco.get('assistenteIA_empresas/mv').cnpj === '21208224000163',
+    banco.get('assistenteIA_empresas/mv'));
 
   console.log('\n5) buscar arquivo que não existe');
   prepararEmpresa();
