@@ -69,6 +69,7 @@ async function carregarClientesParaBuscaPorNome() {
   const snap = await getDocs(clientCollection(cibeleDb, "clientes"));
   cacheClientesPorNome = snap.docs.map((d) => d.data());
   cacheClientesPorNomeEm = Date.now();
+  console.log(`cadastro compartilhado carregado pra busca por nome: ${cacheClientesPorNome.length} registro(s)`);
   return cacheClientesPorNome;
 }
 
@@ -76,15 +77,23 @@ async function carregarClientesParaBuscaPorNome() {
 // na busca da gaveta "Clientes e Fornecedores" da tela. Sem isso, um fornecedor/cliente que a
 // IA não conseguiu extrair o CNPJ do relatório (PIX com documento mascarado, contas a receber
 // sem coluna de CNPJ etc.) sempre voltava "não encontrado" mesmo já estando cadastrado, porque
-// verificarCadastro só tentava por CNPJ exato (achado em uso real).
+// verificarCadastro só tentava por CNPJ exato (achado em uso real). Só devolve resultado quando
+// bate com UM SÓ registro — mais de um bater (ex. "MV" batendo em vários nomes) é ambíguo
+// demais pra escolher sozinho, e escolher errado silenciosamente é pior que dizer "não achei"
+// (achado do Codex: find() pegava o primeiro que batesse, podia confirmar a empresa errada).
 async function lookupEntidadePorNome(nome) {
   const alvo = stripAccentsJs(String(nome || "")).toUpperCase().trim();
   if (!alvo || alvo.length < 3) return null;
   const registros = await carregarClientesParaBuscaPorNome();
-  return registros.find((r) => {
+  const candidatos = registros.filter((r) => {
     const razao = stripAccentsJs(String(r.razao_social || "")).toUpperCase();
     return razao && (razao.includes(alvo) || alvo.includes(razao));
-  }) || null;
+  });
+  if (candidatos.length === 1) return candidatos[0];
+  if (candidatos.length > 1) {
+    console.log(`verificar_cadastro: "${nome}" bateu com ${candidatos.length} registros por nome (ambíguo, não escolhendo nenhum): ${candidatos.map((c) => c.razao_social).join(" | ")}`);
+  }
+  return null;
 }
 
 // Verifica se a empresa atual já está cadastrada no compartilhado (código + CNPJ do Domínio).
@@ -1332,12 +1341,19 @@ exports.assistenteChat = onCall(
       const achados = await Promise.all(
         validas.map(async (e) => {
           if (e.cnpj) {
-            const porCnpj = await lookupEntidade(e.cnpj).catch(() => null);
+            const porCnpj = await lookupEntidade(e.cnpj).catch((err) => {
+              console.error(`verificar_cadastro: erro buscando "${e.nome}" por CNPJ (${e.cnpj}):`, err);
+              return null;
+            });
             if (porCnpj) return porCnpj;
           }
-          return lookupEntidadePorNome(e.nome).catch(() => null);
+          return lookupEntidadePorNome(e.nome).catch((err) => {
+            console.error(`verificar_cadastro: erro buscando "${e.nome}" por nome:`, err);
+            return null;
+          });
         })
       );
+      log(`verificar_cadastro: ${validas.length} entidade(s) consultada(s), ${achados.filter(Boolean).length} encontrada(s)`);
       const encontrados = [];
       const faltando = [];
       validas.forEach((e, i) => (achados[i] ? encontrados : faltando).push(String(e.nome)));
@@ -1518,6 +1534,7 @@ exports.assistenteChat = onCall(
           return { content: "Painel do fechamento atualizado." };
         }
         if (nome === "verificar_cadastro") {
+          log(`verificar_cadastro chamado com: ${JSON.stringify(entrada && entrada.entidades)}`);
           const r = await verificarCadastro(entrada && entrada.entidades);
           const partes = [
             r.faltando.length

@@ -267,13 +267,14 @@
     padding-top: 12px; margin-top: 10px; border-top: 1px solid var(--panel-border);
     display: flex; flex-direction: column; gap: 8px;
   }
-  .status-pill {
-    display: inline-flex; align-items: center; gap: 6px;
-    font-size: 0.72rem; color: var(--ok);
-    background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.25);
-    padding: 5px 10px; border-radius: 999px; width: fit-content;
+  /* Bolinha de status no lugar da pílula "IA conectada" — passar o mouse (title nativo) ou
+     clicar (toggle do rótulo) mostra a descrição, sem ocupar espaço fixo na barra lateral. */
+  .status-row { display: flex; align-items: center; gap: 8px; }
+  .status-dot {
+    width: 10px; height: 10px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok);
+    border: none; padding: 0; cursor: pointer; flex-shrink: 0;
   }
-  .status-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .status-dot-label { font-size: 0.72rem; color: var(--text-dim); }
   .user-row { display: flex; align-items: center; justify-content: space-between; font-size: 0.76rem; color: var(--text-dim); }
   .user-row button {
     background: none; border: 1px solid var(--panel-border); color: var(--text-dim);
@@ -633,9 +634,12 @@
     background: #3a1414; border: 1px solid #7a2e2e; color: #ffd7d7; padding: 12px 18px;
     border-radius: 10px; font-size: 0.85rem; max-width: min(90vw, 480px); z-index: 999;
     box-shadow: 0 8px 24px rgba(0,0,0,0.4); opacity: 0; transition: opacity 0.25s;
-    pointer-events: none;
+    pointer-events: none; user-select: text;
   }
-  .erro-local.show { opacity: 1; }
+  /* pointer-events só liga quando visível — escondido (opacity:0) não pode bloquear clique em
+     nada por baixo; visível, precisa aceitar seleção de texto pra copiar (achado do Antigravity:
+     erro técnico não dava pra copiar e colar pro suporte). */
+  .erro-local.show { opacity: 1; pointer-events: auto; }
 </style>
 </head>
 <body>
@@ -691,7 +695,10 @@
     <div class="empresa-list" id="empresaList"></div>
 
     <div class="sidebar-footer">
-      <span class="status-pill"><span class="dot"></span> IA conectada</span>
+      <div class="status-row">
+        <button type="button" class="status-dot" id="statusDot" title="IA conectada — pronta pra processar mensagens" aria-label="Status da IA"></button>
+        <span class="status-dot-label" id="statusDotLabel" hidden>IA conectada</span>
+      </div>
       <div class="user-row">
         <span id="userEmail"></span>
         <button id="logoutBtn">Sair</button>
@@ -937,6 +944,9 @@
   });
 
   document.getElementById('logoutBtn').addEventListener('click', () => signOut(auth));
+  document.getElementById('statusDot').addEventListener('click', () => {
+    document.getElementById('statusDotLabel').hidden = !document.getElementById('statusDotLabel').hidden;
+  });
 
   // ---------------- empresas ----------------
   const SEED_EMPRESAS = [
@@ -2037,7 +2047,11 @@ function cadParseClientesPdf(allLines) {
     if (!hm) continue;
     const [, codigo, nomeRaw, , docRaw] = hm;
     const docc = cadOnlyDigits(docRaw);
-    if (!docc) continue;
+    // Só aceita 11 (CPF) ou 14 (CNPJ) dígitos — a coluna de documento pode vir cortada/incompleta
+    // numa linha mal formatada do PDF, e sem essa checagem um número de 5 dígitos virava um CPF
+    // "válido" gravado no cadastro compartilhado, classificado só pela contagem de caracteres,
+    // sem checar nada (achado do Codex).
+    if (docc.length !== 11 && docc.length !== 14) continue;
     let municipio = "", uf = "";
     for (let j = i + 1; j <= i + 2 && j < allLines.length; j++) {
       const cm = allLines[j].match(cityRe);
@@ -2065,17 +2079,31 @@ function cadParseEmpresasPdf(allLines) {
 window.cadClientesDB = {};
 window.cadEmpresasDB = {};
 
-function cadVinculosHtml(reg) {
+// Razão social, município e código vêm de PDF importado (ou do próprio Firestore
+// compartilhado, editável por qualquer ferramenta que use o mesmo banco) — nunca confiável o
+// bastante pra virar innerHTML direto. Monta por DOM/textContent, igual o resto do app já faz
+// (achado do Codex: um nome de fornecedor tipo "<img src=x onerror=...>" importado de um PDF
+// rodava como script na tela de quem abrisse a gaveta).
+function cadVinculosCell(reg) {
   const codigos = reg.codigos || {};
-  const chips = Object.keys(codigos).map((chave) => {
-    const m = chave.match(/^(\d+)_(cliente|fornecedor)$/);
-    if (!m) return "";
-    const [, empresaCnpj, papel] = m;
+  const chaves = Object.keys(codigos).filter((chave) => /^\d+_(cliente|fornecedor)$/.test(chave));
+  if (!chaves.length) {
+    const vazio = document.createElement('span');
+    vazio.style.cssText = 'color:var(--text-faint); font-size:0.7rem;';
+    vazio.textContent = 'sem vínculo registrado';
+    return vazio;
+  }
+  const frag = document.createDocumentFragment();
+  chaves.forEach((chave) => {
+    const [, empresaCnpj, papel] = chave.match(/^(\d+)_(cliente|fornecedor)$/);
     const empresa = window.cadEmpresasDB[empresaCnpj];
     const nomeEmpresa = empresa ? empresa.nome : cadFormatDocumento(empresaCnpj);
-    return `<span class="cad-vinculo-chip">${papel === "cliente" ? "Cliente de" : "Fornecedor de"} ${nomeEmpresa} · cód. ${codigos[chave]}</span>`;
-  }).filter(Boolean);
-  return chips.join("") || '<span style="color:var(--text-faint); font-size:0.7rem;">sem vínculo registrado</span>';
+    const chip = document.createElement('span');
+    chip.className = 'cad-vinculo-chip';
+    chip.textContent = `${papel === "cliente" ? "Cliente de" : "Fornecedor de"} ${nomeEmpresa} · cód. ${codigos[chave]}`;
+    frag.appendChild(chip);
+  });
+  return frag;
 }
 function cadRenderResults() {
   const searchBox = document.getElementById('cadSearchBox');
@@ -2103,16 +2131,30 @@ function cadRenderResults() {
     ? `${keys.length} resultado(s)${keys.length > LIMIT ? ` — mostrando os primeiros ${LIMIT}` : ""}`
     : `${keys.length} registro(s) no total — digite pra buscar`;
 
-  body.innerHTML = shown.map((k) => {
+  body.innerHTML = "";
+  if (!shown.length) {
+    if (q || qDigits) {
+      const tr = document.createElement('tr');
+      const td = document.createElement('td');
+      td.colSpan = 5; td.style.color = 'var(--text-faint)'; td.textContent = 'Nenhum registro encontrado.';
+      tr.appendChild(td);
+      body.appendChild(tr);
+    }
+    return;
+  }
+  shown.forEach((k) => {
     const r = window.cadClientesDB[k];
-    return `<tr>
-      <td>${cadFormatDocumento(k)}</td>
-      <td>${r.tipo || ""}</td>
-      <td>${r.razao_social || ""}</td>
-      <td>${[r.municipio, r.uf].filter(Boolean).join("/")}</td>
-      <td>${cadVinculosHtml(r)}</td>
-    </tr>`;
-  }).join("") || (q || qDigits ? '<tr><td colspan="5" style="color:var(--text-faint);">Nenhum registro encontrado.</td></tr>' : "");
+    const tr = document.createElement('tr');
+    const celula = (texto) => { const td = document.createElement('td'); td.textContent = texto; return td; };
+    tr.appendChild(celula(cadFormatDocumento(k)));
+    tr.appendChild(celula(r.tipo || ""));
+    tr.appendChild(celula(r.razao_social || ""));
+    tr.appendChild(celula([r.municipio, r.uf].filter(Boolean).join("/")));
+    const tdVinculos = document.createElement('td');
+    tdVinculos.appendChild(cadVinculosCell(r));
+    tr.appendChild(tdVinculos);
+    body.appendChild(tr);
+  });
 }
 document.getElementById('cadSearchBox').addEventListener('input', cadRenderResults);
 window.cadRenderResults = cadRenderResults;
@@ -2285,14 +2327,19 @@ window.cadastroCloud = {
     const keys = Object.keys(obj || {}); if (!keys.length) return;
     await esperarCadReady();
     const batch = cadWriteBatch(cadDb);
-    keys.forEach((k) => batch.set(cadDoc(cadDb, "clientes", k), obj[k]));
+    // merge:true (não só set()) — o Firestore faz merge recursivo em mapa aninhado ("codigos"),
+    // não substitui o documento inteiro. Sem isso, duas pessoas importando o relatório de
+    // empresas DIFERENTES ao mesmo tempo para o MESMO fornecedor podiam se sobrescrever: quem
+    // salvasse por último apagava o vínculo que o outro tinha acabado de gravar (achado do
+    // Codex).
+    keys.forEach((k) => batch.set(cadDoc(cadDb, "clientes", k), obj[k], { merge: true }));
     await batch.commit();
   },
   async pushManyEmpresas(obj) {
     const keys = Object.keys(obj || {}); if (!keys.length) return;
     await esperarCadReady();
     const batch = cadWriteBatch(cadDb);
-    keys.forEach((k) => batch.set(cadDoc(cadDb, "empresas_cricon", k), obj[k]));
+    keys.forEach((k) => batch.set(cadDoc(cadDb, "empresas_cricon", k), obj[k], { merge: true }));
     await batch.commit();
   },
 };
