@@ -598,6 +598,10 @@
   .cad-counts b { color: var(--text); font-size: 0.95rem; }
   .cad-result-count { font-size: 0.76rem; color: var(--text-faint); }
   .cad-table-wrap { max-height: 260px; overflow: auto; border: 1px solid var(--panel-border); border-radius: 10px; }
+  .cad-table-wrap-big { max-height: 46vh; }
+  .cad-import-row { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+  .cad-import-col { display: flex; flex-direction: column; gap: 10px; }
+  @media (max-width: 720px) { .cad-import-row { grid-template-columns: 1fr; } }
   .cad-table { width: 100%; border-collapse: collapse; font-size: 0.72rem; }
   .cad-table th {
     text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--panel-border);
@@ -799,30 +803,35 @@
     <span>Empresas do escritório: <b id="cadEmpresasCount">0</b></span>
   </div>
   <div class="cad-result-count" id="cadResultCount"></div>
-  <div class="cad-table-wrap"><table class="cad-table">
+  <div class="cad-table-wrap cad-table-wrap-big"><table class="cad-table">
     <thead><tr><th>Documento</th><th>Tipo</th><th>Razão Social</th><th>Município/UF</th><th>Vínculos</th></tr></thead>
     <tbody id="cadResultsBody"></tbody>
   </table></div>
 
-  <p class="cad-section-title">Importar Clientes / Fornecedores (PDF do Domínio)</p>
-  <div class="cad-field">
-    <label>CNPJ da empresa deste relatório</label>
-    <input type="text" id="cadEmpresaCnpjInput" placeholder="00.000.000/0000-00 (tenta detectar sozinho)">
-  </div>
-  <div class="cad-dropzone" id="cadPdfDrop">
-    <div>Arraste o PDF de Clientes ou Fornecedores aqui, ou clique pra escolher</div>
-    <div class="small">Detecta sozinho qual dos dois é — nunca apaga registro antigo, só soma</div>
-  </div>
-  <input type="file" id="cadPdfFile" accept="application/pdf" style="display:none">
-  <div id="cadPdfStatus" class="cad-status" hidden></div>
+  <div class="cad-import-row">
+    <div class="cad-import-col">
+      <p class="cad-section-title">Importar Clientes / Fornecedores (PDF do Domínio)</p>
+      <div class="cad-field">
+        <label>CNPJ da empresa deste relatório</label>
+        <input type="text" id="cadEmpresaCnpjInput" placeholder="00.000.000/0000-00 (tenta detectar sozinho)">
+      </div>
+      <div class="cad-dropzone" id="cadPdfDrop">
+        <div>Arraste o PDF de Clientes ou Fornecedores aqui, ou clique pra escolher</div>
+        <div class="small">Detecta sozinho qual dos dois é — nunca apaga registro antigo, só soma</div>
+      </div>
+      <input type="file" id="cadPdfFile" accept="application/pdf" style="display:none">
+      <div id="cadPdfStatus" class="cad-status" hidden></div>
+    </div>
 
-  <p class="cad-section-title">Cadastro de Empresas (código Domínio × CNPJ)</p>
-  <p class="hint">Guarda código ↔ apelido ↔ CNPJ de cada empresa que o escritório atende — usado pra nomear os vínculos na busca acima.</p>
-  <div class="cad-dropzone" id="cadEmpresasPdfDrop">
-    <div>Arraste o PDF de Cadastro de Empresas aqui</div>
+    <div class="cad-import-col">
+      <p class="cad-section-title">Cadastro de Clientes Cricon</p>
+      <div class="cad-dropzone" id="cadEmpresasPdfDrop">
+        <div>Arraste o PDF de Cadastro de Empresas aqui</div>
+      </div>
+      <input type="file" id="cadEmpresasPdfFile" accept="application/pdf" style="display:none">
+      <div id="cadEmpresasPdfStatus" class="cad-status" hidden></div>
+    </div>
   </div>
-  <input type="file" id="cadEmpresasPdfFile" accept="application/pdf" style="display:none">
-  <div id="cadEmpresasPdfStatus" class="cad-status" hidden></div>
 </div>
 
 <script type="module">
@@ -1770,16 +1779,13 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     avatar.textContent = '✨';
     const bubble = document.createElement('div');
     bubble.className = 'msg-bubble';
-    const dots = document.createElement('div');
-    dots.className = 'typing';
-    dots.append(document.createElement('span'), document.createElement('span'), document.createElement('span'));
     const label = document.createElement('div');
     label.className = 'typing-label';
     label.id = 'typingLabel';
     label.textContent = typingLabelText;
     const progress = document.createElement('div');
     progress.className = 'typing-progress';
-    bubble.append(dots, label, progress);
+    bubble.append(label, progress);
     t.append(avatar, bubble);
     chatBody.appendChild(t);
   }
@@ -2163,7 +2169,11 @@ cadWireDropzone('cadPdfDrop', 'cadPdfFile', async (f, d) => {
       }
       dirty[p.documento] = window.cadClientesDB[p.documento];
     });
-    if (window.cadastroCloud) window.cadastroCloud.pushManyClientes(dirty);
+    // Só mostra sucesso depois que a gravação de verdade terminar — antes, a mensagem vinha
+    // só da leitura do PDF, e uma gravação que falhasse em silêncio (ex.: login com a nuvem
+    // ainda não tinha terminado) parecia ter dado certo sem nunca ter salvo nada.
+    status.textContent = 'PDF lido, salvando no cadastro compartilhado...';
+    if (window.cadastroCloud) await window.cadastroCloud.pushManyClientes(dirty);
     status.className = 'cad-status ok';
     status.textContent = `Cadastro atualizado: ${addedCli} registro(s) novo(s), ${updatedCod} código(s) vinculado(s) (${tipoTitulo}).`;
     cadMarkDropDone(d, `${parsed.length} registros lidos`);
@@ -2193,7 +2203,8 @@ cadWireDropzone('cadEmpresasPdfDrop', 'cadEmpresasPdfFile', async (f, d) => {
       window.cadEmpresasDB[p.documento] = { codigo: p.codigo, nome: p.nome, documento: p.documento, razao_social: p.nome, tipo: p.tipo };
       dirty[p.documento] = window.cadEmpresasDB[p.documento];
     });
-    if (window.cadastroCloud) window.cadastroCloud.pushManyEmpresas(dirty);
+    status.textContent = 'PDF lido, salvando no cadastro compartilhado...';
+    if (window.cadastroCloud) await window.cadastroCloud.pushManyEmpresas(dirty);
     status.className = 'cad-status ok';
     status.textContent = `Cadastro de empresas atualizado: ${added} nova(s), ${updated} atualizada(s).`;
     cadMarkDropDone(d, `${parsed.length} empresas lidas`);
@@ -2227,7 +2238,13 @@ const cadFirebaseConfig = {
 const cadApp = cadInitializeApp(cadFirebaseConfig, "cad-cibele");
 const cadDb = cadGetFirestore(cadApp);
 const cadAuth = cadGetAuth(cadApp);
-let cadReady = false;
+// pushManyClientes/pushManyEmpresas ESPERAM esse login terminar (em vez de desistir em
+// silêncio se ainda não tiver terminado) — antes, importar um PDF logo ao abrir a gaveta
+// podia "dar certo" na tela (a mensagem de sucesso vinha só da leitura do PDF) sem a
+// gravação de verdade nunca ter acontecido, e a busca continuava sem achar o registro
+// (achado real de uso: fornecedores importados sumiam sem erro nenhum).
+let resolverCadReady;
+const cadReadyPromise = new Promise((res) => { resolverCadReady = res; });
 
 function setCadCloudBadge(text, cor) {
   const el = document.getElementById('cadCloudBadge');
@@ -2238,12 +2255,12 @@ function setCadCloudBadge(text, cor) {
 setCadCloudBadge('conectando…', '');
 cadSignInAnonymously(cadAuth).catch((err) => {
   console.error("Cadastro cliente/fornecedor: erro de auth", err);
-  setCadCloudBadge('nuvem indisponível', 'var(--danger)');
+  setCadCloudBadge('nuvem indisponível — a importação vai falhar', 'var(--danger)');
 });
 
 cadOnAuthStateChanged(cadAuth, (user) => {
   if (!user) return;
-  cadReady = true;
+  resolverCadReady();
 
   cadOnSnapshot(cadCollection(cadDb, "clientes"), (snap) => {
     const cloudData = {};
@@ -2261,20 +2278,30 @@ cadOnAuthStateChanged(cadAuth, (user) => {
   }, (err) => console.error("empresas_cricon onSnapshot", err));
 });
 
+// Espera o login terminar, com prazo — sem isso, uma falha de rede na hora do login
+// deixaria a importação pendurada pra sempre "carregando" sem nunca avisar o usuário.
+function esperarCadReady() {
+  return Promise.race([
+    cadReadyPromise,
+    new Promise((_, rej) => setTimeout(() => rej(new Error("não conectou à nuvem do cadastro compartilhado a tempo — tente de novo")), 15000)),
+  ]);
+}
 window.cadastroCloud = {
-  pushManyClientes(obj) {
-    if (!cadReady) return;
+  // Devolve a Promise do commit — quem chama só pode considerar sucesso depois que ela
+  // resolver de verdade, não só depois de terminar de ler o PDF.
+  async pushManyClientes(obj) {
     const keys = Object.keys(obj || {}); if (!keys.length) return;
+    await esperarCadReady();
     const batch = cadWriteBatch(cadDb);
     keys.forEach((k) => batch.set(cadDoc(cadDb, "clientes", k), obj[k]));
-    batch.commit().catch((e) => console.error("pushManyClientes", e));
+    await batch.commit();
   },
-  pushManyEmpresas(obj) {
-    if (!cadReady) return;
+  async pushManyEmpresas(obj) {
     const keys = Object.keys(obj || {}); if (!keys.length) return;
+    await esperarCadReady();
     const batch = cadWriteBatch(cadDb);
     keys.forEach((k) => batch.set(cadDoc(cadDb, "empresas_cricon", k), obj[k]));
-    batch.commit().catch((e) => console.error("pushManyEmpresas", e));
+    await batch.commit();
   },
 };
 </script>
