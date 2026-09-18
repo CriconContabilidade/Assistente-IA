@@ -45,14 +45,18 @@ console.log('\nNOS GERADORES DE VERDADE');
 let r = gera({ tipo: 'lanctos', linhas: [{ data: '10/08/2026', debito: '1', credito: '2', codigoEmp: '185' }] });
 confere('lanctos sem valor -> erro (não gera R$0,00)', !!r.erro && r.erro.includes('valor'), true);
 
-r = gera({ tipo: 'baixa_ent', linhas: [{ numero: '1', databaixa: '10/08/2026' }] });
+r = gera({ tipo: 'baixa_ent', linhas: [{ numero: '1', cnpj: '21208224000163', databaixa: '10/08/2026' }] });
 confere('baixa_ent sem valor -> erro (não baixa R$0,00)', !!r.erro && r.erro.includes('valor'), true);
+
+// achado em uso real: sem CNPJ o Domínio não achava a "Conta Fornecedor" certa
+r = gera({ tipo: 'baixa_ent', linhas: [{ numero: '1', databaixa: '10/08/2026', valor: 100 }] });
+confere('baixa_ent sem CNPJ -> erro (achado em uso real, "Conta Fornecedor" não achava)', !!r.erro && r.erro.includes('CNPJ'), true);
 
 r = gera({ tipo: 'servico_prest', linhas: [{ cnpj: '21208224000163', numeroDocumento: '1', data: '10/08/2026', acumulador: 1, cfps: 9101 }] });
 confere('NFS sem valorServicos -> erro (não emite nota de R$0,00)', !!r.erro && r.erro.includes('serviços'), true);
 
 // juros/multa/desconto/impostos continuam podendo ficar ausentes (defaultam pra 0, de propósito)
-r = gera({ tipo: 'baixa_ent', linhas: [{ numero: '1', databaixa: '10/08/2026', valor: 100 }] });
+r = gera({ tipo: 'baixa_ent', linhas: [{ numero: '1', cnpj: '21208224000163', databaixa: '10/08/2026', valor: 100 }] });
 confere('baixa_ent SEM juros/multa/desconto continua ok (0 de propósito)', !!r.arq, true);
 if (r.erro) console.log('   (erro inesperado:', r.erro, ')');
 

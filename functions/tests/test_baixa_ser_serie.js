@@ -47,7 +47,7 @@ console.log('baixa_ser.txt: coluna "série" logo depois do número do título');
 
 console.log('\nbaixa_ser.txt: série explícita da IA é respeitada (não força sempre "U")');
 {
-  const r = gerar('baixa_ser', [{ numero: '10', serie: '2', vencimento: '01/06/2026', databaixa: '02/06/2026', valor: 100 }]);
+  const r = gerar('baixa_ser', [{ numero: '10', serie: '2', cnpj: '21208224000163', vencimento: '01/06/2026', databaixa: '02/06/2026', valor: 100 }]);
   confere('gera sem erro', !r.erro, true);
   confere('usa a série mandada, não o default', linhasDoArquivo(r.arq.base64)[0].split(';')[1], '2');
 }

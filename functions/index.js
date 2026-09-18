@@ -620,7 +620,12 @@ function buildBaixaLines(linhas, tipo, avisos) {
       // posição pro lado (achado em uso real: "Data de Baixa" recebendo o valor do lançamento,
       // e o lançamento saindo com "Conta cliente" e valor zerados por não achar o título).
       ...(tipo === "baixa_ser" ? [campoEstruturalTxt(l.serie || "U", `série da linha ${index + 1}`, true)] : []),
-      documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`, false, avisos),
+      // Obrigatório (achado em uso real): a suposição de que "o número do título já basta,
+      // CNPJ pode ficar vazio" estava errada — sem o CNPJ, o Domínio não acha a "Conta
+      // Fornecedor"/"Conta cliente" certa (avisa "não obteve retornos", usa 0 como padrão, e o
+      // lançamento sai com débito/crédito diferentes e é recusado). As duas linhas com CNPJ
+      // vazio reproduziram exatamente esse erro; a única com CNPJ preenchido passou.
+      documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`, true, avisos),
       dataTxt(l.vencimento, `vencimento da linha ${index + 1}`, false),
       dataTxt(l.databaixa, `data da baixa da linha ${index + 1}`),
       valorObrigatorioTxt(l.valor, `valor da linha ${index + 1}`),
@@ -1042,6 +1047,7 @@ Convenções gerais de todos os TXT: separador ";", quebra de linha CRLF (inclus
   INICIA LOTE — regra importante (o Domínio não tem marcador de "fim de lote": sem o "1" separando, ele emenda um lançamento no outro, virando tudo um lançamento só): toda linha que tem DÉBITO E CRÉDITO preenchidos na própria linha (lançamento simples) leva "iniciaLote": "1" — SEMPRE, mesmo fora de partida múltipla (o sistema já corrige sozinho se você esquecer, mas prefira já mandar certo). Só fica vazio numa linha de CONTINUAÇÃO de partida múltipla, ou seja, uma linha que tem só débito OU só crédito preenchido (nunca os dois) e vem logo depois da linha que abriu aquele lote com "1".
 - Baixa de Entradas (fornecedor) → "baixa_ent.txt". Colunas: número do título; CNPJ/CPF (só dígitos); vencimento (DD/MM/AAAA); data da baixa (DD/MM/AAAA); valor pago; juros; multa; desconto.
 - Baixa de Saídas → "baixa_sai.txt". Colunas: número do título; CNPJ/CPF; vencimento; data da baixa; valor recebido; juros; multa; desconto; PIS; COFINS; CSLL; IRRF.
+  CNPJ/CPF É OBRIGATÓRIO em toda baixa (achado em uso real: sem ele, o Domínio não acha a "Conta Fornecedor"/"Conta cliente" certa — avisa "não obteve retornos", usa 0 como padrão, e o lançamento sai com débito ≠ crédito e é recusado). Se o relatório não mostrar o CNPJ na linha do título, use verificar_cadastro com o nome do fornecedor/cliente pra achar (a busca já procura por aproximação, não precisa do nome exato) — só pergunte ao usuário se realmente não achar nada.
 - Baixa de Serviços → "baixa_ser.txt". MESMO layout da Baixa de Saídas, só que com "série" logo depois do número do título (o título de Baixa de Serviços nasce de uma Nota Fiscal — ServicoPrest.txt —, que sempre leva série; sem ela aqui o Domínio não localiza o título certo e tudo desalinha). Colunas: número do título; série ("U" se não souber outra — mesmo padrão do ServicoPrest.txt); CNPJ/CPF; vencimento; data da baixa; valor recebido; juros; multa; desconto; PIS; COFINS; CSLL; IRRF.
 - Nota Fiscal de Serviço → "ServicoPrest.txt". 28 colunas nesta ordem: CPF/CNPJ; Razão Social; UF; Município; Endereço; Número Documento; Série (use "U"); Data; Situação (0); Acumulador (1); CFPS (9101); Valor Serviços; Valor Descontos; Valor Dedução; Valor Contábil (= Valor Serviços); Base de Cálculo; Alíquota ISS; Valor ISS Normal; Valor ISS Retido; Valor IRRF; Valor PIS; Valor COFINS; Valor CSLL; Valor CRF; Valor INSS; Código do Item; Quantidade; Valor Unitário (as colunas sem valor conhecido ficam vazias, não zero, exceto onde indicado).
 - Layout de Nota Fiscal de Entrada e de Saída (mercadoria) ainda não foi confirmado em nenhuma ferramenta do escritório — se precisar gerar um desses, avise o usuário que precisa de um arquivo-modelo antes de montar o layout, nunca invente.
