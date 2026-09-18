@@ -1419,12 +1419,22 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     appendSafeMessageText(bubble, m.text || '');
 
     const arquivosGerados = (Array.isArray(m.arquivosGerados) ? m.arquivosGerados : []).filter(a => a && a.nome && a.base64);
+    // Arquivo grande demais pra caber no documento do Firestore (item 12 da auditoria do Codex)
+    // some do filtro acima por não ter base64 — sem aviso, parecia que o arquivo nunca foi
+    // gerado. O download em si já funcionou na hora (essa mensagem só é recarregada depois).
+    const arquivosGrandesDemais = (Array.isArray(m.arquivosGerados) ? m.arquivosGerados : []).filter(a => a && a.grandeDemaisPraGravar);
     for (const fileName of Array.isArray(m.files) ? m.files : []) {
       const chip = document.createElement('div');
       chip.className = 'file-chip';
       chip.textContent = `📄 ${String(fileName)}`;
       bubble.appendChild(chip);
     }
+    arquivosGrandesDemais.forEach((arquivo) => {
+      const aviso = document.createElement('div');
+      aviso.className = 'file-chip';
+      aviso.textContent = `⚠️ ${String(arquivo.nome)} foi gerado, mas era grande demais pra guardar — baixe de novo se precisar (peça pra IA gerar novamente).`;
+      bubble.appendChild(aviso);
+    });
     arquivosGerados.forEach((arquivo) => {
       const grade = renderConferencia(arquivo);
       if (grade) bubble.appendChild(grade);

@@ -129,6 +129,22 @@ async function blocosDoArquivo(f) {
 // em pedaços e remontado na hora de reler. Margem folgada de propósito.
 const CHUNK_CHARS = 900 * 1024;
 
+// mensagens/{id} e processamentos/{requestId} gravam arquivosGerados com o base64 inteiro do
+// arquivo dentro do próprio documento — ao contrário da resposta da chamada em si (que não
+// passa pelo Firestore, sem limite de tamanho), esses dois SÃO documentos, com o limite de
+// 1 MiB do Firestore. Um lote grande de lançamentos pode gerar um TXT grande o bastante pra
+// estourar esse limite sozinho, derrubando a gravação inteira — o texto e a confirmação no chat
+// se perdiam mesmo depois da IA já ter feito todo o trabalho com sucesso (achado do Codex).
+// Acima do limite, grava só os metadados: o botão de download já foi mostrado nessa mesma
+// resposta (não depende do Firestore pra essa primeira vez), só não sobrevive a um F5 depois.
+const LIMITE_BASE64_EM_DOC_CHARS = 700 * 1024;
+function arquivosGeradosParaGravar(arquivosGerados) {
+  const totalBase64 = arquivosGerados.reduce((soma, a) => soma + ((a && a.base64) ? a.base64.length : 0), 0);
+  if (totalBase64 <= LIMITE_BASE64_EM_DOC_CHARS) return arquivosGerados;
+  console.warn(`arquivosGerados grande demais pra gravar no Firestore (${totalBase64} chars de base64) — gravando só os metadados`);
+  return arquivosGerados.map((a) => ({ ...a, base64: null, grandeDemaisPraGravar: true }));
+}
+
 // Guarda o arquivo original junto da ficha do documento, pra IA poder reler depois sem
 // precisar que o usuário reenvie (antes só o resumo em texto sobrevivia, e todo detalhe que
 // a IA não tivesse escrito nele se perdia pra sempre).
@@ -1682,7 +1698,7 @@ exports.assistenteChat = onCall(
         role: "assistant",
         text,
         files: [],
-        arquivosGerados: arquivosGerados,
+        arquivosGerados: arquivosGeradosParaGravar(arquivosGerados),
         criadoEm: FieldValue.serverTimestamp(),
         ...(requestId ? { requestId } : {}),
       });
@@ -1719,7 +1735,7 @@ exports.assistenteChat = onCall(
         await processamentoRef.set({
           status: "completed",
           text: resultado.text,
-          arquivosGerados: resultado.arquivosGerados,
+          arquivosGerados: arquivosGeradosParaGravar(resultado.arquivosGerados || []),
           concluidoEm: FieldValue.serverTimestamp(),
         }, { merge: true });
       }
