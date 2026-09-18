@@ -1429,13 +1429,16 @@ exports.assistenteChat = onCall(
         })
       );
       log(`verificar_cadastro: ${validas.length} entidade(s) consultada(s), ${achados.filter((a) => a.achado).length} encontrada(s), ${achados.filter((a) => a.indisponivel).length} indisponível(is)`);
+      // encontrados guarda {nome, cnpj} — não só o nome. Sem o CNPJ aqui, a IA sabia que o
+      // fornecedor/cliente EXISTIA no cadastro mas nunca recebia o número em si, e tinha que
+      // pedir ao usuário de novo mesmo depois de "achar" (achado em uso real).
       const encontrados = [];
       const faltando = [];
       const indisponiveis = [];
       const possiveis = []; // { nome, opcoes: [razao_social, ...] } — bateu com mais de um, pede confirmação
       validas.forEach((e, i) => {
         const r = achados[i];
-        if (r.achado) encontrados.push(String(e.nome));
+        if (r.achado) encontrados.push({ nome: String(e.nome), cnpj: normalizarDocumento(r.achado.documento || r.achado.cnpj || e.cnpj || "") });
         else if (r.indisponivel) indisponiveis.push(String(e.nome));
         else if (r.candidatos) possiveis.push({ nome: String(e.nome), opcoes: r.candidatos.map((c) => c.razao_social) });
         else faltando.push(String(e.nome));
@@ -1649,7 +1652,7 @@ exports.assistenteChat = onCall(
           const r = await verificarCadastro(entrada && entrada.entidades);
           const partes = [];
           if (r.faltando.length) partes.push(`NÃO encontrados no cadastro compartilhado, nem por aproximação de nome: ${r.faltando.join(", ")} — peça ao usuário o CNPJ de cada um (ou o Cadastro de Fornecedores/Clientes só com esses).`);
-          if (r.encontrados.length) partes.push(`Encontrados: ${r.encontrados.join(", ")}.`);
+          if (r.encontrados.length) partes.push(`Encontrados (use ESSE CNPJ EXATO no campo "cnpj" de cada um, não peça de novo ao usuário): ${r.encontrados.map((e) => `${e.nome} (CNPJ/CPF: ${e.cnpj || "cadastrado sem documento — peça ao usuário"})`).join(", ")}.`);
           // Bateu com mais de um nome parecido — em vez de já pedir o CNPJ do zero, mostra as
           // opções e deixa o usuário só CONFIRMAR qual é (pedido explícito do usuário: procurar
           // pelo nome/iniciais antes de perguntar).

@@ -201,7 +201,8 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
     (params) => {
       const res = params.messages[params.messages.length - 1].content;
       confere('dois resultados, um por ferramenta', res.length === 2);
-      confere('cadastro aponta quem falta', /NÃO encontrados.*Fornecedor X/.test(res[1].content) && /Encontrados: BB RF/.test(res[1].content), res[1].content);
+      confere('cadastro aponta quem falta', /NÃO encontrados.*Fornecedor X/.test(res[1].content) && /Encontrados.*BB RF/.test(res[1].content), res[1].content);
+      confere('cadastro devolve o CNPJ de quem achou (não só confirma que existe)', res[1].content.includes('43617343000102'), res[1].content);
       confere('cadastro informa código e CNPJ da empresa', /código 185, CNPJ 21208224000163/.test(res[1].content));
       return resp([txt('Falta o CNPJ do Fornecedor X.')], 'end_turn');
     },
@@ -217,7 +218,8 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
     resp([uso('verificar_cadastro', { entidades: [{ nome: 'Monlote Urbanizadora' }] })], 'tool_use'),
     (params) => {
       const res = params.messages[params.messages.length - 1].content[0];
-      confere('acha pelo nome mesmo sem CNPJ', /Encontrados: Monlote Urbanizadora/.test(res.content), res.content);
+      confere('acha pelo nome mesmo sem CNPJ', /Encontrados.*Monlote Urbanizadora/.test(res.content), res.content);
+      confere('devolve o CNPJ achado pelo nome (não só o nome)', res.content.includes('59888185000165'), res.content);
       return resp([txt('ok')], 'end_turn');
     },
   ];
