@@ -484,7 +484,10 @@ function normalizarDocumento(valor) {
 function documentoTxt(valor, nome = "CNPJ/CPF", obrigatorio = false, avisos = null) {
   const digits = normalizarDocumento(valor);
   if (!digits) {
-    if (obrigatorio) throw new Error(`Campo obrigatório ausente: ${nome}`);
+    if (obrigatorio) {
+      const dica = /CNPJ|CPF/.test(nome) ? " — NÃO peça ao usuário ainda: chame verificar_cadastro com o nome do fornecedor/cliente dessa linha (a busca é por aproximação), use o CNPJ que ela devolver, e só pergunte se ela não achar" : "";
+      throw new Error(`Campo obrigatório ausente: ${nome}${dica}`);
+    }
     return "";
   }
   if (/[A-Z]/.test(digits)) {
@@ -1017,6 +1020,7 @@ MODO DE CONFIGURAÇÃO INICIAL DA EMPRESA: quando o usuário mandar de uma vez o
 - Esse processo pode levar várias mensagens de ida e volta — está tudo bem, o objetivo aqui é construir o cadastro de padrões da empresa com calma, não entregar tudo pronto na primeira resposta.
 - Durante a configuração inicial, pergunte também: (1) qual o regime tributário da empresa (Lucro Presumido, Simples Nacional, Lucro Real)?; (2) é um escritório de advocacia? Guarde as respostas como observação permanente da empresa — isso muda como alguns lançamentos são tratados (aplicação financeira, custas processuais), conforme as seções abaixo.
 - Depois que o usuário mandar todos os relatórios iniciais necessários (ou disser que não tem mais nenhum), pergunte exatamente isto: "Existe mais algum relatório que o cliente envia para auxiliar na minha conciliação dos lançamentos?"
+- ANTES de gerar qualquer baixa_ent/baixa_sai/baixa_ser (ou ServicoPrest.txt) cujo relatório não traga o CNPJ/CPF de cada cliente/fornecedor, chame verificar_cadastro com o nome de TODOS eles — clientes inclusive, não só fornecedores. Nunca pergunte o CNPJ ao usuário sem ter consultado o cadastro antes na mesma conversa.
 - O Cadastro de Fornecedores e Clientes é compartilhado entre TODAS as empresas do escritório (é o mesmo banco usado por outras ferramentas do Hub) — NÃO peça esse relatório por padrão quando receber Contas a Pagar/Receber. Em vez disso, quando processar um relatório de Contas a Pagar ou Contas a Receber, chame a ferramenta verificar_cadastro com todos os fornecedores/clientes distintos mencionados. Ela responde na hora quem não está no cadastro compartilhado — só peça informação ao usuário sobre esses que faltaram, nunca o relatório inteiro de cadastro de cara.
 - O Código e CNPJ da própria empresa também é um dado compartilhado — não peça isso por padrão. A ferramenta verificar_cadastro informa se a empresa tem esses dados. Assim que o usuário informar (ou verificar_cadastro achar pelo nome no cadastro compartilhado), chame salvar_codigo_cnpj_empresa na hora — sem isso, os dados NÃO ficam guardados de verdade, e a próxima mensagem (ou até a mesma conversa mais adiante) esquece e pergunta tudo de novo. Nunca deixe esse dado só na conversa.
 
