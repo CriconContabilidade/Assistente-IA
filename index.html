@@ -1820,9 +1820,11 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
 
   function setComposerBusy(busy) {
     sendBtn.disabled = busy;
-    messageInput.disabled = busy;
     attachBtn.disabled = busy;
     sendBtn.textContent = busy ? '⏳' : '➤';
+    // Caixa fica livre enquanto a IA responde (como WhatsApp): desabilitar tirava o foco e
+    // o usuário tinha que clicar de novo. O envio já é bloqueado por isSending.
+    if (!busy && !messageInput.disabled) messageInput.focus();
   }
 
   let typingTimers = [];
