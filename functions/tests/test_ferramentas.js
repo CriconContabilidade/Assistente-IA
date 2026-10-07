@@ -2,7 +2,7 @@
 // de ferramentas sem gastar com a API e sem tocar no banco de verdade.
 const Module = require('module');
 const path = require('path');
-const ARQ = 'C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js';
+const ARQ = require('path').join(__dirname, '..', 'index.js');
 
 // ---------- Firestore em memória ----------
 const banco = new Map(); // caminho do doc -> dados
@@ -117,6 +117,8 @@ let clientesCompartilhados = [
   { razao_social: 'MONLOTE URBANIZADORA LTDA', documento: '59888185000165', tipo: 'CNPJ' },
   { razao_social: 'MARIA SILVA CONSULTORIA LTDA', documento: '11111111000111', tipo: 'CNPJ' },
   { razao_social: 'JOSE SILVA TRANSPORTES LTDA', documento: '22222222000122', tipo: 'CNPJ' },
+  // nome duplicado/cortado como vem do Domínio de verdade
+  { razao_social: 'FERNANDA CADO FERNANDA CADO WAIHRICH', documento: '52998224725', tipo: 'CPF' },
 ];
 let empresasCriconCompartilhadas = [];
 let cibeleIndisponivel = false;
@@ -157,7 +159,7 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
   let r = await pedido('gera os lançamentos');
   confere('um arquivo gerado', r.arquivosGerados.length === 1 && r.arquivosGerados[0].nome === 'lanctos.txt');
   confere('texto final certo', r.text === 'Aqui está o arquivo, revise antes de importar.', r.text);
-  confere('ferramentas enviadas na chamada', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(',') === 'gerar_arquivo,buscar_arquivo,atualizar_fechamento,verificar_cadastro,salvar_codigo_cnpj_empresa,consultar_padrao,salvar_padrao', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(','));
+  confere('ferramentas enviadas na chamada', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(',') === 'gerar_arquivo,buscar_arquivo,atualizar_fechamento,verificar_cadastro,salvar_codigo_cnpj_empresa,consultar_padrao,salvar_padrao,salvar_observacao', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(','));
   const seg = chamadas[1].messages;
   const resultado = seg[seg.length - 1].content[0];
   confere('2a chamada leva tool_use e tool_result com o mesmo id',
@@ -333,6 +335,86 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
   try { await pedido('oi'); } catch (e) { erro = e; }
   confere('vira o erro amigável de sempre', erro && erro.code === 'internal' && /Erro ao falar com a IA/.test(erro.message), erro && erro.message);
   confere('não tentou de novo', chamadas.length === 1);
+
+
+  console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('verificar_cadastro', { entidades: [{ nome: 'Fernanda Cado Waihrich' }, { nome: 'Fernanda Cado' }] })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('acha por palavras mesmo com nome duplicado no cadastro', res.content.includes('52998224725') && !res.content.includes('NÃO encontrados'), res.content);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('confere a inquilina');
+  const est1 = banco.get('assistenteIA_empresas/mv/estado/atual');
+  confere('CPF achado fica guardado no estado da empresa', est1 && est1.entidades && est1.entidades.some((e) => e.cnpj === '52998224725'), JSON.stringify(est1));
+
+  console.log('\n12) arquivo gerado fica guardado e volta no prompt da mensagem seguinte; correção parcial e baixa com título errado avisam');
+  const NFS = (n, doc) => ({ cnpj: doc, numeroDocumento: String(n), data: '31/08/2026', acumulador: 1, cfps: 9101, valorServicos: 100 + n });
+  roteiro = [
+    resp([uso('gerar_arquivo', { tipo: 'servico_prest', linhas: [NFS(1197, '52998224725'), NFS(1198, '52998224725'), NFS(1199, '52998224725')] })], 'tool_use'),
+    resp([txt('feito')], 'end_turn'),
+  ];
+  await pedido('gera as notas');
+  const est2 = banco.get('assistenteIA_empresas/mv/estado/atual');
+  confere('linhas do ServicoPrest gravadas no estado', est2.arquivos && est2.arquivos.servico_prest && est2.arquivos.servico_prest.linhas.length === 3);
+  chamadas.length = 0;
+  roteiro = [
+    resp([uso('gerar_arquivo', { tipo: 'servico_prest', linhas: [NFS(1197, '52998224725')] })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('arquivo parcial (1 de 3 linhas) manda a IA regerar completo', res.content.includes('ATENÇÃO') && res.content.includes('INCOMPLETO'), res.content);
+      return resp([uso('gerar_arquivo', { tipo: 'baixa_ser', linhas: [{ numero: '1197', cnpj: '52998224725', vencimento: '31/08/2026', databaixa: '02/09/2026', valor: 100 }, { numero: '1218', cnpj: '52998224725', vencimento: '31/08/2026', databaixa: '02/09/2026', valor: 5 }] })], 'tool_use');
+    },
+    (params) => resp([txt('ok')], 'end_turn'),
+  ];
+  r = await pedido('corrige a primeira nota');
+  const sistemaDaPrimeiraChamada = chamadas[0].system.map((b) => b.text).join('\n');
+  confere('prompt da mensagem seguinte traz o estado salvo (CPF e linhas do último arquivo)', sistemaDaPrimeiraChamada.includes('ESTADO SALVO DO TRABALHO') && sistemaDaPrimeiraChamada.includes('52998224725') && sistemaDaPrimeiraChamada.includes('"numeroDocumento":"1199"'));
+  confere('estado fica fora do bloco cacheado do prompt', chamadas[0].system.length === 2 && !chamadas[0].system[1].cache_control);
+  const baixa = r.arquivosGerados.find((a) => a.nome === 'baixa_ser.txt');
+  confere('baixa com título que não existe nas notas gera aviso (rendimento 212 x 1218)', baixa && baixa.avisos.some((a) => a.includes('1218') && a.includes('MESMO número')), JSON.stringify(baixa && baixa.avisos));
+  confere('título que bate não gera aviso', baixa && !baixa.avisos.some((a) => a.includes('1197')));
+
+  console.log('\n13) aviso de conferência proíbe a IA de dizer "conferido"');
+  roteiro = [
+    resp([uso('gerar_arquivo', { tipo: 'servico_prest', linhas: [NFS(1, '11111111111')] })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('resultado da ferramenta diz pra não afirmar que está conferido', res.content.includes('NÃO diga que o arquivo está conferido'), res.content);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('gera uma nota com cpf ruim');
+
+  console.log('\n14) salvar_observacao grava na lista da empresa, sem duplicar');
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('salvar_observacao', { texto: 'NFS de aluguel é emitida no CPF do inquilino, com data do último dia do mês anterior ao recebimento' })], 'tool_use'),
+    resp([uso('salvar_observacao', { texto: 'nfs de aluguel é emitida no cpf do inquilino, com data do último dia do mês anterior ao recebimento' })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('segunda igual é reconhecida', res.content.includes('já estava salva'), res.content);
+      return resp([txt('anotei')], 'end_turn');
+    },
+  ];
+  await pedido('a nota é no CPF do inquilino');
+  const notas = banco.get('assistenteIA_empresas/mv').notas;
+  confere('observação gravada uma vez só', notas.length === 1 && notas[0].includes('CPF do inquilino'), JSON.stringify(notas));
+
+  console.log('\n15) lista de pendências é guardada e volta no prompt');
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('atualizar_fechamento', { competencia: '09/2026', listaPendencias: ['14/09 TRANSFERENCIA R$30.000', '15/09 PIX R$803,06'] })], 'tool_use'),
+    resp([txt('ok')], 'end_turn'),
+  ];
+  await pedido('segue');
+  chamadas.length = 0;
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('próximo');
+  confere('fila de pendências aparece no prompt seguinte', chamadas[0].system.map((b) => b.text).join('\n').includes('1. 14/09 TRANSFERENCIA R$30.000'));
 
   console.log(falhas === 0 ? '\nTUDO OK' : `\n${falhas} FALHA(S)`);
   process.exit(falhas === 0 ? 0 : 1);

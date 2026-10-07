@@ -3,7 +3,7 @@
 // Holding/Althoff na Fase 1 — duas regras contraditórias pra mesma chave — não pode mais
 // acontecer sem ninguém perceber).
 const Module = require('module');
-const ARQ = 'C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js';
+const ARQ = require('path').join(__dirname, '..', 'index.js');
 
 const banco = new Map();
 function docRef(c) {

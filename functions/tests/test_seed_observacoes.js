@@ -1,7 +1,7 @@
 // Testa a nova Cloud Function seedObservacoesEmpresas (item 1 da auditoria): admin-only,
 // idempotente, aditiva, sem sobrescrever observação já editada por alguém.
 const Module = require('module');
-const ARQ = 'C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js';
+const ARQ = require('path').join(__dirname, '..', 'index.js');
 
 const banco = new Map();
 function docRef(c) {

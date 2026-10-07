@@ -4,7 +4,7 @@
 // derrubava a gravação inteira, mesmo com a IA já tendo feito todo o trabalho. Acima do limite,
 // grava só os metadados (nome/tipo/linhas/avisos), sem o base64.
 const fs = require('fs');
-const src = fs.readFileSync('C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(__dirname, '..', 'index.js'), 'utf8');
 const a = src.indexOf('const LIMITE_BASE64_EM_DOC_CHARS');
 const b = src.indexOf('// Guarda o arquivo original junto da ficha do documento');
 const m = { exports: {} };

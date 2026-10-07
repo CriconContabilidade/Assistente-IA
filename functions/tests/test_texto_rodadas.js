@@ -2,7 +2,7 @@
 // não pode mais aparecer concatenado com o texto final ("pronto, gerei") quando há ferramenta
 // envolvida. Sem ferramenta nenhuma, continua concatenando tudo (comportamento de sempre).
 const Module = require('module');
-const ARQ = 'C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js';
+const ARQ = require('path').join(__dirname, '..', 'index.js');
 
 const banco = new Map();
 function docRef(c) { return { id: c.split('/').pop(), path: c, async get() { const d = banco.get(c); return { exists: !!d, id: this.id, data: () => d, ref: this }; }, async set(dados, opts) { banco.set(c, opts && opts.merge ? { ...(banco.get(c) || {}), ...dados } : dados); }, collection: (n) => colRef(`${c}/${n}`) }; }

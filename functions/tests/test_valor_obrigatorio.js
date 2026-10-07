@@ -1,7 +1,7 @@
 // Testa o achado da auditoria (item 4): valor ausente não pode virar "0" silencioso nos
 // campos principais (valor do lançamento, valor da baixa, valor dos serviços da NFS).
 const fs = require('fs');
-const src = fs.readFileSync('C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(__dirname, '..', 'index.js'), 'utf8');
 const a = src.indexOf('const VALOR_MAXIMO_PLAUSIVEL');
 const b = src.indexOf('function documentoTxt');
 const m = { exports: {} };

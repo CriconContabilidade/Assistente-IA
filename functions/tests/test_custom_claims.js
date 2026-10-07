@@ -2,7 +2,7 @@
 // de segurança durante a transição), e sincronizarClaimsAdmin() seta o claim nos 3 admins sem
 // duplicar nem sobrescrever outros claims que a pessoa já tivesse.
 const Module = require('module');
-const ARQ = 'C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js';
+const ARQ = require('path').join(__dirname, '..', 'index.js');
 
 const usuariosAuth = new Map(); // email -> { uid, customClaims }
 const authFalso = {

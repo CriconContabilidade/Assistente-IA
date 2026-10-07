@@ -2,7 +2,7 @@
 // subcoleção certa, remove SÓ o texto de padrões antigo (PADROES_SEED_DETALHADO da Fase 1)
 // das observações — preservando qualquer outra observação real —, e é idempotente.
 const Module = require('module');
-const ARQ = 'C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js';
+const ARQ = require('path').join(__dirname, '..', 'index.js');
 
 const banco = new Map();
 function docRef(c) {

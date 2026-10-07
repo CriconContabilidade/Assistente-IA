@@ -6,7 +6,7 @@
 //   de travar pra sempre (achado do Codex);
 // - concorrência real (duas chamadas, nenhuma terminou) continua recusando a segunda.
 const Module = require('module');
-const ARQ = 'C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js';
+const ARQ = require('path').join(__dirname, '..', 'index.js');
 
 const banco = new Map();
 function docRef(c) {

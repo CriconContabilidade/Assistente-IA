@@ -1,5 +1,5 @@
 const fs = require('fs');
-const src = fs.readFileSync('C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(__dirname, '..', 'index.js'), 'utf8');
 
 function recorta(inicio, fim) {
   const a = src.indexOf(inicio);

@@ -6,7 +6,7 @@
 // SEMPRE leva "1" — só fica em branco numa linha de CONTINUAÇÃO de partida múltipla (só um dos
 // dois lados preenchido).
 const fs = require('fs');
-const src = fs.readFileSync('C:/Users/user/Meu Drive/GUILHERME/Claude/GitHub/Assistente-IA/functions/index.js', 'utf8');
+const src = fs.readFileSync(require('path').join(__dirname, '..', 'index.js'), 'utf8');
 
 const a2 = src.indexOf('function decodificarTexto');
 const b2 = src.indexOf('// Converte um arquivo anexado');
