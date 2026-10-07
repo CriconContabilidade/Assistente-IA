@@ -375,8 +375,7 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
   confere('prompt da mensagem seguinte traz o estado salvo (CPF e linhas do último arquivo)', sistemaDaPrimeiraChamada.includes('ESTADO SALVO DO TRABALHO') && sistemaDaPrimeiraChamada.includes('52998224725') && sistemaDaPrimeiraChamada.includes('"numeroDocumento":"1199"'));
   confere('estado fica fora do bloco cacheado do prompt', chamadas[0].system.length === 2 && !chamadas[0].system[1].cache_control);
   const baixa = r.arquivosGerados.find((a) => a.nome === 'baixa_ser.txt');
-  confere('baixa com título que não existe nas notas gera aviso (rendimento 212 x 1218)', baixa && baixa.avisos.some((a) => a.includes('1218') && a.includes('MESMO número')), JSON.stringify(baixa && baixa.avisos));
-  confere('título que bate não gera aviso', baixa && !baixa.avisos.some((a) => a.includes('1197')));
+  confere('baixa de nota que já existe no Contas a Receber (fora do último ServicoPrest) NÃO gera aviso falso', baixa && baixa.avisos.length === 0, JSON.stringify(baixa && baixa.avisos));
 
   console.log('\n13) aviso de conferência proíbe a IA de dizer "conferido"');
   roteiro = [
