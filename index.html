@@ -518,6 +518,15 @@
     border-radius: 8px; padding: 5px 10px; font-size: 0.78rem; color: var(--text-dim);
   }
   .attach-chip button { background: none; border: none; color: var(--text-faint); cursor: pointer; font-size: 0.85rem; }
+  .attach-chip .attach-name { color: var(--text-dim); font: inherit; font-size: 0.78rem; padding: 0; text-decoration: underline dotted; text-underline-offset: 3px; }
+  .attach-chip .attach-name:hover, .attach-chip .attach-name:focus-visible { color: var(--text); outline: none; }
+  .attach-thumb { width: 28px; height: 28px; object-fit: cover; border-radius: 5px; border: 1px solid var(--panel-border); }
+  .anexo-card { max-width: 900px; width: 92vw; max-height: 90vh; display: flex; flex-direction: column; }
+  .anexo-body { overflow: auto; flex: 1; min-height: 160px; }
+  .anexo-img { max-width: 100%; display: block; margin: 0 auto; border-radius: 8px; }
+  .anexo-frame { width: 100%; height: 68vh; border: 0; border-radius: 8px; background: #fff; }
+  .anexo-texto { white-space: pre-wrap; word-break: break-word; font-size: 0.75rem; color: var(--text); margin: 0; }
+  .anexo-aviso { font-size: 0.85rem; color: var(--text-dim); padding: 12px 4px; }
 
   /* ---------- notes drawer ---------- */
   .drawer-overlay {
@@ -553,6 +562,28 @@
   .modal-btn-cancel { background: none; border: 1px solid var(--panel-border); color: var(--text-dim); }
   .modal-btn-cancel:hover { color: var(--text); border-color: var(--text-dim); }
   .modal-btn-confirm { background: var(--accent-grad); border: none; color: white; }
+  .modal-btn-danger { background: var(--danger); border: none; color: white; }
+  .cad-del-btn { background: none; border: 1px solid transparent; border-radius: 6px; cursor: pointer; padding: 2px 6px; font-size: 0.8rem; opacity: 0.6; }
+  .cad-del-btn:hover, .cad-del-btn:focus-visible { opacity: 1; border-color: var(--danger); outline: none; }
+  .resp-card { max-width: 420px; }
+  .resp-list { max-height: 280px; overflow-y: auto; margin: 10px 0 4px; display: flex; flex-direction: column; gap: 6px; padding-right: 2px; }
+  .resp-item {
+    display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border-radius: 10px;
+    border: 1px solid var(--panel-border); background: rgba(255,255,255,0.03); color: var(--text);
+    text-align: left; cursor: pointer; font: inherit;
+  }
+  .resp-item:hover, .resp-item:focus-visible { border-color: var(--accent2); outline: none; background: rgba(56,189,248,0.08); }
+  .resp-item.atual { border-color: var(--accent2); }
+  .resp-avatar {
+    width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center;
+    background: rgba(255,255,255,0.06); border: 1px solid var(--panel-border); font-size: 1.05rem;
+  }
+  .resp-textos { min-width: 0; flex: 1; }
+  .resp-nome { font-size: 0.9rem; font-weight: 600; }
+  .resp-email { font-size: 0.72rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .resp-check { color: var(--accent2); font-weight: 700; }
+  .resp-vazio { font-size: 0.8rem; color: var(--text-dim); padding: 8px 4px; }
+  .resp-outro { margin-top: 10px; }
   .drawer {
     position: fixed; top: 0; right: -400px; width: 380px; height: 100vh; z-index: 6;
     background: var(--panel-solid); border-left: 1px solid var(--panel-border);
@@ -796,6 +827,44 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="respOverlay">
+  <div class="modal-card resp-card" role="dialog" aria-modal="true" aria-labelledby="respTitle">
+    <h3 id="respTitle">Responsável</h3>
+    <input type="text" id="respBusca" placeholder="Buscar pelo nome..." autocomplete="off">
+    <div class="resp-list" id="respList"></div>
+    <div class="resp-outro" id="respOutro" hidden>
+      <label class="modal-label" for="respEmail">E-mail de quem ainda não está na lista</label>
+      <input type="email" id="respEmail" placeholder="nome@empresa.com" autocomplete="off">
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn-cancel" id="respCancelBtn" type="button">Cancelar</button>
+      <button class="modal-btn-confirm" id="respConfirmBtn" type="button" hidden>Confirmar</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="cadDelOverlay">
+  <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="cadDelTitle">
+    <h3 id="cadDelTitle">Excluir do cadastro compartilhado?</h3>
+    <div id="cadDelInfo" style="font-size:0.88rem;font-weight:600;margin-bottom:10px;"></div>
+    <div class="modal-dica">Isso apaga o registro para TODAS as ferramentas do escritório que usam este cadastro. Para ele voltar, é preciso importar o relatório do Domínio de novo.</div>
+    <div class="modal-actions">
+      <button class="modal-btn-cancel" id="cadDelCancel" type="button">Cancelar</button>
+      <button class="modal-btn-danger" id="cadDelConfirm" type="button">Excluir</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="anexoOverlay">
+  <div class="modal-card anexo-card" role="dialog" aria-modal="true" aria-labelledby="anexoTitulo">
+    <h3 id="anexoTitulo">Arquivo</h3>
+    <div class="anexo-body" id="anexoCorpo"></div>
+    <div class="modal-actions">
+      <button class="modal-btn-cancel" id="anexoFechar" type="button">Fechar</button>
+    </div>
+  </div>
+</div>
+
 <div class="drawer-overlay" id="drawerOverlay"></div>
 <div class="drawer" id="notesDrawer">
   <button class="close-drawer" id="closeDrawerBtn">✕</button>
@@ -820,7 +889,7 @@
 <div class="drawer wide" id="cadDrawer">
   <button class="close-drawer" id="closeCadDrawerBtn">✕</button>
   <h3>Clientes e Fornecedores <span id="cadCloudBadge" class="admin-badge" style="background:var(--panel); color:var(--text-dim); font-weight:600;">conectando…</span></h3>
-  <p class="hint">Mesmo cadastro compartilhado de CNPJ/CPF usado pelas outras ferramentas do escritório (Baixas de Parcelas, Cadastro de Clientes e Fornecedores). Busque, ou importe um relatório do Domínio pra atualizar — nunca apaga registro antigo, só soma.</p>
+  <p class="hint">Mesmo cadastro compartilhado de CNPJ/CPF usado pelas outras ferramentas do escritório (Baixas de Parcelas, Cadastro de Clientes e Fornecedores). Busque, ou importe um relatório do Domínio pra atualizar — a importação nunca apaga registro, só soma (pra excluir um, admin usa o botão 🗑 da linha).</p>
 
   <div class="cad-tabs">
     <button type="button" class="cad-tab active" id="cadTabConsultarBtn">🔍 Consultar</button>
@@ -835,7 +904,7 @@
     </div>
     <div class="cad-result-count" id="cadResultCount"></div>
     <div class="cad-table-wrap cad-table-wrap-big"><table class="cad-table">
-      <thead><tr><th>Documento</th><th>Tipo</th><th>Razão Social</th><th>Município/UF</th><th>Vínculos</th></tr></thead>
+      <thead><tr><th>Documento</th><th>Tipo</th><th>Razão Social</th><th>Município/UF</th><th>Vínculos</th><th></th></tr></thead>
       <tbody id="cadResultsBody"></tbody>
     </table></div>
   </div>
@@ -947,6 +1016,8 @@
         console.warn('Não deu pra checar o custom claim de admin, usando só a lista de e-mail', err);
       }
       isAdmin = temClaimAdmin || isAdminEmail(user.email);
+      window.stagiarioIsAdmin = isAdmin;
+      if (window.cadRenderResults) window.cadRenderResults();
       sincronizarClaimsSeNecessario();
       migrarPadroesSeNecessario();
       userEmail.replaceChildren(document.createTextNode(user.email || ''));
@@ -1151,9 +1222,21 @@
     return String(emp.responsavelEmail).toLowerCase() === (currentUserEmail || "").toLowerCase();
   }
 
+  const NOMES_EXTRAS = {
+    "contabilidadecricon@gmail.com": "Contabilidade Cricon",
+    "rh@cricon.com.br": "RH Cricon",
+  };
+  function nomeDoUsuario(email) {
+    const e = String(email || '').trim().toLowerCase();
+    if (USUARIOS_CONHECIDOS[e]) return USUARIOS_CONHECIDOS[e].nome;
+    if (NOMES_EXTRAS[e]) return NOMES_EXTRAS[e];
+    const local = e.split('@')[0].replace(/[._-]+/g, ' ').trim();
+    return local ? local.replace(/\b\w/g, c => c.toUpperCase()) : e;
+  }
+
   function responsavelLabel(emp) {
     if (!emp.responsavelEmail) return "Sem responsável — visível pra todos";
-    return "👤 " + String(emp.responsavelEmail);
+    return "👤 " + nomeDoUsuario(emp.responsavelEmail);
   }
 
   // Modal próprio no lugar de window.prompt() — o prompt() nativo não funciona dentro do
@@ -1209,14 +1292,139 @@
     });
   }
 
-  async function promptAssign(emp) {
-    const val = await showPrompt({
-      title: `Responsável por "${emp.nome}"`,
-      placeholder: "E-mail do responsável (vazio = sem responsável)",
-      defaultValue: emp.responsavelEmail || ""
+  // Pessoas que aparecem na lista de responsável: as conhecidas do app, os admins e quem já é
+  // responsável por alguma empresa. Quem não estiver aqui entra pela opção "Outro e-mail".
+  function opcoesResponsavel(emp) {
+    const mapa = new Map();
+    const add = (email) => {
+      const e = String(email || '').trim().toLowerCase();
+      if (!e || mapa.has(e)) return;
+      const conhecido = USUARIOS_CONHECIDOS[e];
+      mapa.set(e, { email: e, nome: nomeDoUsuario(e), emoji: conhecido ? conhecido.emoji : '👤' });
+    };
+    Object.keys(USUARIOS_CONHECIDOS).forEach(add);
+    ADMIN_EMAILS.forEach(add);
+    empresas.forEach(e => add(e.responsavelEmail));
+    add(emp.responsavelEmail);
+    return [...mapa.values()].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+  }
+
+  // Devolve o e-mail escolhido, '' pra "sem responsável" ou null se cancelar.
+  function showSelecionarResponsavel(emp) {
+    const overlay = document.getElementById('respOverlay');
+    const title = document.getElementById('respTitle');
+    const busca = document.getElementById('respBusca');
+    const lista = document.getElementById('respList');
+    const outro = document.getElementById('respOutro');
+    const outroEmail = document.getElementById('respEmail');
+    const cancelBtn = document.getElementById('respCancelBtn');
+    const confirmBtn = document.getElementById('respConfirmBtn');
+    const atual = String(emp.responsavelEmail || '').trim().toLowerCase();
+    const pessoas = opcoesResponsavel(emp);
+
+    return new Promise((resolve) => {
+      title.textContent = `Responsável por "${emp.nome}"`;
+      busca.value = '';
+      outro.hidden = true;
+      outroEmail.value = '';
+      confirmBtn.hidden = true;
+
+      function fechar(resultado) {
+        overlay.classList.remove('show');
+        overlay.removeEventListener('click', onOverlay);
+        overlay.removeEventListener('keydown', onKeydown);
+        busca.removeEventListener('input', desenhar);
+        cancelBtn.removeEventListener('click', onCancel);
+        confirmBtn.removeEventListener('click', onConfirmOutro);
+        resolve(resultado);
+      }
+      function onCancel() { fechar(null); }
+      function onOverlay(e) { if (e.target === overlay) fechar(null); }
+      function onConfirmOutro() {
+        const email = outroEmail.value.trim().toLowerCase();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { outroEmail.focus(); outroEmail.style.borderColor = '#f87171'; return; }
+        fechar(email);
+      }
+      function itens() { return [...lista.querySelectorAll('.resp-item')]; }
+      function onKeydown(e) {
+        if (e.key === 'Escape') { e.preventDefault(); fechar(null); return; }
+        if (e.target === outroEmail) { if (e.key === 'Enter') { e.preventDefault(); onConfirmOutro(); } return; }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+          e.preventDefault();
+          const todos = itens();
+          if (!todos.length) return;
+          const i = todos.indexOf(document.activeElement);
+          const prox = e.key === 'ArrowDown' ? (i + 1) % todos.length : (i <= 0 ? todos.length - 1 : i - 1);
+          todos[prox].focus();
+        } else if (e.key === 'Enter' && e.target === busca) {
+          e.preventDefault();
+          const primeiro = itens()[0];
+          if (primeiro) primeiro.click();
+        }
+      }
+      function linha(emoji, nome, email, marcado, aoEscolher) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'resp-item' + (marcado ? ' atual' : '');
+        const av = document.createElement('span');
+        av.className = 'resp-avatar';
+        av.textContent = emoji;
+        const tx = document.createElement('span');
+        tx.className = 'resp-textos';
+        const n = document.createElement('div');
+        n.className = 'resp-nome';
+        n.textContent = nome;
+        tx.appendChild(n);
+        if (email) {
+          const m = document.createElement('div');
+          m.className = 'resp-email';
+          m.textContent = email;
+          tx.appendChild(m);
+        }
+        b.append(av, tx);
+        if (marcado) {
+          const ck = document.createElement('span');
+          ck.className = 'resp-check';
+          ck.textContent = '✓';
+          b.appendChild(ck);
+        }
+        b.addEventListener('click', aoEscolher);
+        return b;
+      }
+      function desenhar() {
+        const q = busca.value.trim().toLowerCase();
+        lista.textContent = '';
+        const filtradas = pessoas.filter(p => !q || p.nome.toLowerCase().includes(q) || p.email.includes(q));
+        filtradas.forEach(p => lista.appendChild(linha(p.emoji, p.nome, p.email, p.email === atual, () => fechar(p.email))));
+        if (!q) lista.appendChild(linha('🌐', 'Sem responsável', 'Visível pra todos', atual === '', () => fechar('')));
+        lista.appendChild(linha('✉️', 'Outro e-mail…', '', false, () => {
+          outro.hidden = false;
+          confirmBtn.hidden = false;
+          outroEmail.focus();
+        }));
+        if (q && !filtradas.length) {
+          const v = document.createElement('div');
+          v.className = 'resp-vazio';
+          v.textContent = 'Ninguém com esse nome na lista. Use "Outro e-mail…".';
+          lista.insertBefore(v, lista.firstChild);
+        }
+      }
+
+      busca.addEventListener('input', desenhar);
+      overlay.addEventListener('click', onOverlay);
+      overlay.addEventListener('keydown', onKeydown);
+      cancelBtn.addEventListener('click', onCancel);
+      confirmBtn.addEventListener('click', onConfirmOutro);
+      desenhar();
+      overlay.classList.add('show');
+      setTimeout(() => busca.focus(), 0);
     });
+  }
+
+  async function promptAssign(emp) {
+    const val = await showSelecionarResponsavel(emp);
     if (val === null) return;
-    await updateDoc(doc(db, "assistenteIA_empresas", emp.id), { responsavelEmail: val.trim().toLowerCase() });
+    await updateDoc(doc(db, "assistenteIA_empresas", emp.id), { responsavelEmail: val });
   }
 
   // Nível de "esforço" (profundidade de raciocínio) da IA por empresa — mesmos valores aceitos
@@ -1252,6 +1460,7 @@
       const sub = document.createElement('div');
       sub.className = 'empresa-sub';
       sub.textContent = responsavelLabel(emp);
+      sub.title = emp.responsavelEmail ? String(emp.responsavelEmail) : '';
       info.append(name, sub);
       item.append(avatar, info);
       if (isAdmin) {
@@ -1690,12 +1899,78 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     messageInput.focus();
   });
 
+  // Miniaturas e pré-visualização usam object URLs; guarda pra liberar a memória a cada redesenho.
+  let miniaturasUrls = [];
+  function abrirPreviewAnexo(f) {
+    const overlay = document.getElementById('anexoOverlay');
+    const corpo = document.getElementById('anexoCorpo');
+    const fechar = document.getElementById('anexoFechar');
+    document.getElementById('anexoTitulo').textContent = f.name;
+    corpo.textContent = '';
+    const urls = [];
+    const nome = String(f.name || '');
+    const tipo = String(f.type || '');
+    if (tipo.startsWith('image/')) {
+      const url = URL.createObjectURL(f); urls.push(url);
+      const img = document.createElement('img');
+      img.className = 'anexo-img'; img.src = url; img.alt = nome;
+      corpo.appendChild(img);
+    } else if (tipo === 'application/pdf' || /\.pdf$/i.test(nome)) {
+      const url = URL.createObjectURL(f); urls.push(url);
+      const frame = document.createElement('iframe');
+      frame.className = 'anexo-frame'; frame.src = url; frame.title = nome;
+      corpo.appendChild(frame);
+    } else if (tipo.startsWith('text/') || /\.(txt|csv|ofx)$/i.test(nome)) {
+      const pre = document.createElement('pre');
+      pre.className = 'anexo-texto'; pre.textContent = 'Carregando...';
+      corpo.appendChild(pre);
+      f.slice(0, 200000).text().then((t) => { pre.textContent = t + (f.size > 200000 ? '\n\n… (mostrando só o começo do arquivo)' : ''); })
+        .catch(() => { pre.textContent = 'Não consegui ler este arquivo pra mostrar.'; });
+    } else {
+      const aviso = document.createElement('div');
+      aviso.className = 'anexo-aviso';
+      aviso.textContent = 'Não dá pra mostrar este tipo de arquivo aqui (Excel, por exemplo), mas ele vai normalmente pra IA.';
+      corpo.appendChild(aviso);
+    }
+    function fecharModal() {
+      overlay.classList.remove('show');
+      overlay.removeEventListener('keydown', onKey);
+      overlay.removeEventListener('click', onFundo);
+      fechar.removeEventListener('click', fecharModal);
+      corpo.textContent = '';
+      urls.forEach((u) => URL.revokeObjectURL(u));
+    }
+    function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); fecharModal(); } }
+    function onFundo(e) { if (e.target === overlay) fecharModal(); }
+    overlay.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', onFundo);
+    fechar.addEventListener('click', fecharModal);
+    overlay.classList.add('show');
+    setTimeout(() => fechar.focus(), 0);
+  }
+
   function renderAttachPreview() {
+    miniaturasUrls.forEach((u) => URL.revokeObjectURL(u));
+    miniaturasUrls = [];
     attachPreview.innerHTML = "";
     pendingFiles.forEach((f, i) => {
       const chip = document.createElement('div');
       chip.className = 'attach-chip';
-      chip.append(document.createTextNode(`📄 ${f.name} `));
+      if (String(f.type || '').startsWith('image/')) {
+        const url = URL.createObjectURL(f); miniaturasUrls.push(url);
+        const mini = document.createElement('img');
+        mini.className = 'attach-thumb'; mini.src = url; mini.alt = '';
+        chip.appendChild(mini);
+      } else {
+        chip.append(document.createTextNode('📄 '));
+      }
+      const nomeBtn = document.createElement('button');
+      nomeBtn.type = 'button';
+      nomeBtn.className = 'attach-name';
+      nomeBtn.title = 'Clique pra ver o arquivo antes de enviar';
+      nomeBtn.textContent = f.name;
+      nomeBtn.addEventListener('click', () => abrirPreviewAnexo(f));
+      chip.append(nomeBtn, document.createTextNode(' '));
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.dataset.i = String(i);
@@ -2196,6 +2471,47 @@ function cadVinculosCell(reg) {
   });
   return frag;
 }
+function cadConfirmarExclusao(documento, reg) {
+  const overlay = document.getElementById('cadDelOverlay');
+  const info = document.getElementById('cadDelInfo');
+  const cancelar = document.getElementById('cadDelCancel');
+  const confirmar = document.getElementById('cadDelConfirm');
+  const vinculos = Object.keys(reg.codigos || {}).length;
+  info.textContent = `${reg.razao_social || '(sem nome)'} — ${cadFormatDocumento(documento)}` + (vinculos ? ` — ${vinculos} vínculo(s) com empresas` : '');
+  return new Promise((resolve) => {
+    function fechar(r) {
+      overlay.classList.remove('show');
+      overlay.removeEventListener('keydown', onKey);
+      overlay.removeEventListener('click', onFundo);
+      cancelar.removeEventListener('click', onCancelar);
+      confirmar.removeEventListener('click', onConfirmar);
+      resolve(r);
+    }
+    function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); fechar(false); } }
+    function onFundo(e) { if (e.target === overlay) fechar(false); }
+    function onCancelar() { fechar(false); }
+    function onConfirmar() { fechar(true); }
+    overlay.addEventListener('keydown', onKey);
+    overlay.addEventListener('click', onFundo);
+    cancelar.addEventListener('click', onCancelar);
+    confirmar.addEventListener('click', onConfirmar);
+    overlay.classList.add('show');
+    setTimeout(() => cancelar.focus(), 0);
+  });
+}
+async function cadExcluirRegistro(documento) {
+  if (!window.stagiarioIsAdmin) return;
+  const reg = window.cadClientesDB[documento];
+  if (!reg) return;
+  if (!(await cadConfirmarExclusao(documento, reg))) return;
+  try {
+    await window.cadastroCloud.deleteCliente(documento);
+  } catch (err) {
+    console.error('Erro excluindo do cadastro compartilhado', err);
+    const negado = /permission|permiss/i.test(String((err && (err.code || err.message)) || ''));
+    alert(`Não consegui excluir: ${negado ? 'as regras do cadastro compartilhado não permitem exclusão por aqui.' : ((err && err.message) || 'erro desconhecido')}`);
+  }
+}
 function cadRenderResults() {
   const searchBox = document.getElementById('cadSearchBox');
   const q = cadNormalizeText(searchBox.value);
@@ -2227,7 +2543,7 @@ function cadRenderResults() {
     if (q || qDigits) {
       const tr = document.createElement('tr');
       const td = document.createElement('td');
-      td.colSpan = 5; td.style.color = 'var(--text-faint)'; td.textContent = 'Nenhum registro encontrado.';
+      td.colSpan = 6; td.style.color = 'var(--text-faint)'; td.textContent = 'Nenhum registro encontrado.';
       tr.appendChild(td);
       body.appendChild(tr);
     }
@@ -2244,6 +2560,18 @@ function cadRenderResults() {
     const tdVinculos = document.createElement('td');
     tdVinculos.appendChild(cadVinculosCell(r));
     tr.appendChild(tdVinculos);
+    const tdAcoes = document.createElement('td');
+    if (window.stagiarioIsAdmin) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'cad-del-btn';
+      del.title = 'Excluir do cadastro compartilhado';
+      del.setAttribute('aria-label', `Excluir ${r.razao_social || k}`);
+      del.textContent = '🗑';
+      del.addEventListener('click', () => cadExcluirRegistro(k));
+      tdAcoes.appendChild(del);
+    }
+    tr.appendChild(tdAcoes);
     body.appendChild(tr);
   });
 }
@@ -2355,7 +2683,7 @@ cadRenderResults();
 
 <script type="module">
 import { initializeApp as cadInitializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import { getFirestore as cadGetFirestore, collection as cadCollection, doc as cadDoc, onSnapshot as cadOnSnapshot, writeBatch as cadWriteBatch } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import { getFirestore as cadGetFirestore, collection as cadCollection, doc as cadDoc, onSnapshot as cadOnSnapshot, writeBatch as cadWriteBatch, deleteDoc as cadDeleteDoc } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import { getAuth as cadGetAuth, signInAnonymously as cadSignInAnonymously, onAuthStateChanged as cadOnAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
 // Mesmo projeto Firebase ("conversoes-cibele") e mesmas coleções "clientes"/"empresas_cricon"
@@ -2447,6 +2775,11 @@ window.cadastroCloud = {
   // resolver de verdade, não só depois de terminar de ler o PDF.
   pushManyClientes(obj) { return cadCommitEmLotes("clientes", obj); },
   pushManyEmpresas(obj) { return cadCommitEmLotes("empresas_cricon", obj); },
+  async deleteCliente(documento) {
+    if (!documento || /[\/\s]/.test(String(documento))) throw new Error("documento inválido");
+    await esperarCadReady();
+    await cadDeleteDoc(cadDoc(cadDb, "clientes", documento));
+  },
 };
 </script>
 
