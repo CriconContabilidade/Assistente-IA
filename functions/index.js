@@ -811,7 +811,7 @@ const FERRAMENTAS = [
   },
   {
     name: "buscar_arquivo",
-    description: "Reabre o arquivo original de um relatório que o usuário já enviou nesta empresa (a lista está no histórico de relatórios do prompt). Use quando precisar de um detalhe que não está no resumo — data exata, redação do histórico, valor de uma linha. Nunca peça ao usuário para reenviar um arquivo já enviado: use esta ferramenta.",
+    description: "Reabre o arquivo original de um relatório que o usuário já enviou nesta empresa (a lista está no histórico de relatórios do prompt). Use quando precisar de um detalhe que não está no resumo — data exata, redação do histórico, valor de uma linha. Nunca peça ao usuário para reenviar um arquivo já enviado: use esta ferramenta. MAS reabrir um arquivo é caro e lento: só chame quando o resumo realmente não tiver o dado que a resposta exige, no máximo 1 ou 2 arquivos por resposta, e nunca para conversa, dúvida simples ou algo que o resumo, as observações ou o ESTADO SALVO já respondem.",
     input_schema: {
       type: "object",
       properties: {
@@ -1059,9 +1059,25 @@ function buildSystemPrompt(empresaNome, notas, documentos, cadastro, fechamento)
     ? notasSeguras.map((n) => `- ${String(n)}`).join("\n")
     : "(nenhuma observação registrada ainda para esta empresa)";
 
+  // Cada relatório processado deixa um "resumo" (a resposta inteira da IA na hora). Mandar todos
+  // inteiros a cada mensagem faz o começo do prompt crescer sem parar (200 relatórios = dezenas
+  // de milhares de tokens por mensagem, mais lento e mais caro). Os mais recentes entram quase
+  // completos; os antigos só como índice curto, e quem precisar do detalhe reabre o arquivo com
+  // buscar_arquivo. Nada se perde: o resumo completo continua guardado.
+  const DOCS_RECENTES_COMPLETOS = 6;
+  const RESUMO_RECENTE_MAX = 1500;
+  const RESUMO_ANTIGO_MAX = 200;
+  const encurtarResumo = (texto, max) => {
+    const limpo = String(texto || "").replace(/\n{3,}/g, "\n\n").trim();
+    return limpo.length <= max ? limpo : `${limpo.slice(0, max).trimEnd()}… (resumo cortado — use buscar_arquivo pra ver o relatório inteiro)`;
+  };
   const documentosTexto = documentosSeguros.length
     ? documentosSeguros
-        .map((d) => `[${d.dataTexto}] ${(Array.isArray(d.arquivos) ? d.arquivos : []).join(", ")}\n${d.resumo}`)
+        .map((d, i) => {
+          const recente = i >= documentosSeguros.length - DOCS_RECENTES_COMPLETOS;
+          const nomes = (Array.isArray(d.arquivos) ? d.arquivos : []).join(", ");
+          return `[${d.dataTexto}] ${nomes}\n${encurtarResumo(d.resumo, recente ? RESUMO_RECENTE_MAX : RESUMO_ANTIGO_MAX)}`;
+        })
         .join("\n\n")
     : "(nenhum relatório processado ainda para esta empresa)";
 
@@ -1072,7 +1088,7 @@ Empresa atual: ${empresaNome}${cadastroTexto}
 Observações e padrões já ensinados especificamente para esta empresa:
 ${notasTexto}
 
-Histórico de relatórios já processados para esta empresa (mais antigos primeiro — use isso pra responder perguntas sobre documentos enviados antes, mesmo que o arquivo original não esteja anexado agora):
+Histórico de relatórios já processados para esta empresa (mais antigos primeiro; os mais antigos aparecem só como índice curto, e quando um resumo vier cortado ou faltar um detalhe, reabra o arquivo com buscar_arquivo em vez de pedir pro usuário reenviar):
 ${documentosTexto}
 
 MEMÓRIA ENTRE MENSAGENS (REGRA IMPORTANTE): você não lembra do resultado das ferramentas de uma mensagem pra outra, só do texto da conversa. Por isso o sistema grava um bloco "ESTADO SALVO DO TRABALHO" (CNPJ/CPF já achados no cadastro, pendências abertas e as linhas EXATAS do último arquivo gerado de cada tipo), que aparece logo depois destas regras. Use assim: (1) CNPJ/CPF: copie do estado salvo ou do retorno de verificar_cadastro, NUNCA digite de memória nem leia de imagem sem conferir (já houve CPF com dígito trocado e zero à esquerda perdido); se o CPF só aparece em print do usuário, copie dígito a dígito e confira o aviso de dígito verificador. (2) Correção de arquivo: parta das linhas do estado salvo, altere só o que foi pedido e gere o arquivo COMPLETO de novo; nunca gere um arquivo parcial só com as linhas corrigidas, porque o download anterior se perde. (3) Baixa de Serviços: o número (e a série) do título é o da nota que consta no Contas a Receber (casando por cliente, valor e vencimento), e a data da baixa é a data do crédito no extrato bancário; notas que você gerou agora no ServicoPrest.txt só entram na baixa se corresponderem a um recebimento do mês. Nunca invente numeração pra baixa: ou o número vem do Contas a Receber, ou da nota gerada que corresponde àquele recebimento. (4) Pendências: mantenha "listaPendencias" em atualizar_fechamento sempre que a fila de perguntas mudar (uma frase curta por item: data, histórico, valor); quando o usuário disser "próximo" ou "pode mandar", siga a lista, nunca pergunte "qual é o próximo". (5) Nunca diga que um arquivo está "conferido", "validado" ou "certinho" se a ferramenta devolveu avisos: diga que há pontos pra conferir. (6) Quando o usuário te CORRIGIR ou ensinar uma regra fixa desta empresa (data da nota, acumulador, numeração, em nome de quem a nota é emitida, tratamento de um tipo de lançamento), chame salvar_observacao NA HORA, uma frase por regra, sem pedir confirmação e sem reimprimir; assim no próximo mês você já sabe.
@@ -1392,20 +1408,33 @@ exports.assistenteChat = onCall(
     // esse trecho como cacheável, a releitura sai por 10% do preço do token normal.
     // São dois pontos de corte: o prompt de sistema e o fim do histórico. A mensagem atual
     // fica de fora do cache de propósito — ela muda toda vez.
+    // O cache padrão dura só 5 minutos: numa conversa de fechamento (o usuário confere no
+    // Domínio, volta, pergunta de novo) quase toda mensagem pegava o cache vencido e reenviava
+    // as dezenas de milhares de tokens do começo por preço cheio, e mais devagar. Com 1 hora, o
+    // começo da conversa fica lido a 10% do preço entre uma mensagem e outra. Se a API recusar
+    // o TTL, chamarIA() tira e repete com o padrão.
+    let ttl1hAtivo = true;
+    const marcadoresCache = [];
+    const novoCacheControl = () => {
+      const c = { type: "ephemeral", ttl: "1h" };
+      marcadoresCache.push(c);
+      return c;
+    };
     const systemPrompt = [{
       type: "text",
       text: buildSystemPrompt(empresa.nome, empresa.notas, documentos, { codigo: empresa.codigoDominio, cnpj: normalizarDocumento(empresa.cnpj) }, fechamentoAtual),
-      cache_control: { type: "ephemeral" },
+      cache_control: novoCacheControl(),
     }];
-    // Fora do cache de propósito: muda a cada arquivo gerado/cadastro consultado.
+    // Bloco próprio, também em cache: só muda quando um arquivo é gerado ou um CNPJ é achado,
+    // então nas mensagens seguintes é lido do cache em vez de reenviado por preço cheio.
     const blocoEstado = montarBlocoEstado(estado);
-    if (blocoEstado) systemPrompt.push({ type: "text", text: blocoEstado });
+    if (blocoEstado) systemPrompt.push({ type: "text", text: blocoEstado, cache_control: novoCacheControl() });
     const fimDoHistorico = messages[messages.length - 2];
     if (fimDoHistorico && typeof fimDoHistorico.content === "string" && fimDoHistorico.content) {
       fimDoHistorico.content = [{
         type: "text",
         text: fimDoHistorico.content,
-        cache_control: { type: "ephemeral" },
+        cache_control: novoCacheControl(),
       }];
     }
 
@@ -1442,6 +1471,12 @@ exports.assistenteChat = onCall(
       try {
         return await pedir();
       } catch (err) {
+        if (ttl1hAtivo && Anthropic.BadRequestError && err instanceof Anthropic.BadRequestError && /ttl|cache/i.test(String(err.message))) {
+          console.error("API recusou o TTL de 1h do cache — repetindo com o padrão de 5 minutos:", err.message);
+          ttl1hAtivo = false;
+          marcadoresCache.forEach((c) => { delete c.ttl; });
+          return await chamarIA();
+        }
         const recusouFerramentas = ferramentasAtivas
           && Anthropic.BadRequestError && err instanceof Anthropic.BadRequestError
           && !messages.some((m) => Array.isArray(m.content) && m.content.some((b) => b.type === "tool_use"));
@@ -1466,8 +1501,14 @@ exports.assistenteChat = onCall(
 
     // Custo é a principal preocupação aqui, então cada chamada registra quanto gastou e
     // quanto veio do cache — sem isso só dá pra estimar de fora.
+    const totaisUso = { chamadas: 0, entrada: 0, gravado: 0, lido: 0, saida: 0 };
     const logUso = (r) => {
       const u = (r && r.usage) || {};
+      totaisUso.chamadas += 1;
+      totaisUso.entrada += u.input_tokens ?? 0;
+      totaisUso.gravado += u.cache_creation_input_tokens ?? 0;
+      totaisUso.lido += u.cache_read_input_tokens ?? 0;
+      totaisUso.saida += u.output_tokens ?? 0;
       log(`tokens: entrada ${u.input_tokens ?? 0} | cache gravado ${u.cache_creation_input_tokens ?? 0} | cache lido ${u.cache_read_input_tokens ?? 0} | saída ${u.output_tokens ?? 0}`);
     };
 
@@ -1872,7 +1913,22 @@ exports.assistenteChat = onCall(
     const textos = [];
     let houveFerramenta = false;
     let response;
+    let marcadorRolante = null;
     for (let rodada = 1; rodada <= MAX_RODADAS; rodada++) {
+      // Da 2ª rodada em diante a conversa já carrega o que a rodada anterior trouxe (PDFs
+      // reabertos, resultados de ferramenta). Marcar o último bloco faz a rodada seguinte ler
+      // isso do cache em vez de pagar de novo por preço cheio. Só um marcador rolante por vez
+      // (a API aceita no máximo 4 pontos de cache no total).
+      if (rodada > 1) {
+        const ultima = messages[messages.length - 1];
+        const blocos = ultima && Array.isArray(ultima.content) ? ultima.content : null;
+        const alvo = blocos && blocos[blocos.length - 1];
+        if (alvo && typeof alvo === "object") {
+          if (marcadorRolante && marcadorRolante !== alvo) delete marcadorRolante.cache_control;
+          alvo.cache_control = { type: "ephemeral" };
+          marcadorRolante = alvo;
+        }
+      }
       log(rodada === 1 ? "chamando a Anthropic API" : `chamando a Anthropic API (rodada ${rodada})`);
       response = await chamarIA();
       log("resposta da Anthropic recebida");
@@ -1902,6 +1958,7 @@ exports.assistenteChat = onCall(
         break;
       }
     }
+    log(`total da mensagem (${totaisUso.chamadas} chamada(s) à IA): entrada ${totaisUso.entrada} | cache gravado ${totaisUso.gravado} | cache lido ${totaisUso.lido} | saída ${totaisUso.saida}`);
     // Se alguma rodada chamou ferramenta, texto de rodada anterior é sempre um "vou fazer
     // isso agora" (nunca uma pergunta de verdade esperando resposta — isso sempre termina o
     // turn sem chamar ferramenta), então concatenar dava mensagens tipo "Vou gerar o

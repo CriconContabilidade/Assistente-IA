@@ -159,6 +159,7 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
   let r = await pedido('gera os lançamentos');
   confere('um arquivo gerado', r.arquivosGerados.length === 1 && r.arquivosGerados[0].nome === 'lanctos.txt');
   confere('texto final certo', r.text === 'Aqui está o arquivo, revise antes de importar.', r.text);
+  confere('cache do prompt com TTL de 1h e estado fora do 1º bloco', chamadas[0].system[0].cache_control && chamadas[0].system[0].cache_control.ttl === '1h');
   confere('prompt traz a personalidade (Michael Scott, com 🥁 depois da piada)', chamadas[0].system[0].text.includes('Michael Scott') && chamadas[0].system[0].text.includes('🥁'));
   confere('ferramentas enviadas na chamada', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(',') === 'gerar_arquivo,buscar_arquivo,atualizar_fechamento,verificar_cadastro,salvar_codigo_cnpj_empresa,consultar_padrao,salvar_padrao,salvar_observacao', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(','));
   const seg = chamadas[1].messages;
@@ -338,6 +339,32 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
   confere('não tentou de novo', chamadas.length === 1);
 
 
+  console.log('\n10b) histórico de relatórios no prompt fica enxuto (os antigos viram índice)');
+  prepararEmpresa();
+  for (let i = 1; i <= 10; i++) banco.set(`assistenteIA_empresas/mv/documentos/d${String(i).padStart(2, '0')}`, { arquivos: [`rel${i}.pdf`], resumo: 'X'.repeat(5000) + `FIM${i}` });
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('oi');
+  const promptDocs = chamadas[0].system[0].text;
+  const qtdX = (promptDocs.match(/X/g) || []).length;
+  confere('só 6 resumos recentes (1500) + 4 antigos (200) entram, não os 50000 caracteres', qtdX >= 9000 && qtdX <= 10000, String(qtdX));
+  confere('todos os 10 relatórios continuam listados pelo nome', [1,2,3,4,5,6,7,8,9,10].every((i) => promptDocs.includes(`rel${i}.pdf`)));
+  confere('resumo cortado avisa pra usar buscar_arquivo', promptDocs.includes('use buscar_arquivo pra ver o relatório inteiro'));
+  banco.clear();
+
+  console.log('\n10c) API recusa o TTL de 1h do cache -> repete com o padrão; cache rolante entre rodadas de ferramenta');
+  prepararEmpresa();
+  roteiro = [
+    () => { throw new FakeAnthropic.BadRequestError('cache_control.ttl: invalid'); },
+    resp([uso('atualizar_fechamento', { competencia: '08/2026', pendencias: 1 })], 'tool_use'),
+    resp([txt('feito')], 'end_turn'),
+  ];
+  r = await pedido('oi');
+  confere('respondeu normalmente mesmo com a recusa', r.text === 'feito', r.text);
+  confere('1ª tentativa pedia 1h', chamadas[0].system[0].cache_control.ttl === '1h');
+  confere('repetição saiu sem ttl (cache padrão)', chamadas[1].system[0].cache_control && chamadas[1].system[0].cache_control.ttl === undefined);
+  const ultimaMsg = chamadas[2].messages[chamadas[2].messages.length - 1];
+  confere('na 2ª rodada o último resultado de ferramenta vira ponto de cache', Array.isArray(ultimaMsg.content) && ultimaMsg.content[ultimaMsg.content.length - 1].cache_control);
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [
@@ -374,7 +401,7 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
   r = await pedido('corrige a primeira nota');
   const sistemaDaPrimeiraChamada = chamadas[0].system.map((b) => b.text).join('\n');
   confere('prompt da mensagem seguinte traz o estado salvo (CPF e linhas do último arquivo)', sistemaDaPrimeiraChamada.includes('ESTADO SALVO DO TRABALHO') && sistemaDaPrimeiraChamada.includes('52998224725') && sistemaDaPrimeiraChamada.includes('"numeroDocumento":"1199"'));
-  confere('estado fica fora do bloco cacheado do prompt', chamadas[0].system.length === 2 && !chamadas[0].system[1].cache_control);
+  confere('estado é um bloco separado do prompt fixo, com cache próprio (1h)', chamadas[0].system.length === 2 && chamadas[0].system[1].cache_control && chamadas[0].system[1].cache_control.ttl === '1h');
   const baixa = r.arquivosGerados.find((a) => a.nome === 'baixa_ser.txt');
   confere('baixa de nota que já existe no Contas a Receber (fora do último ServicoPrest) NÃO gera aviso falso', baixa && baixa.avisos.length === 0, JSON.stringify(baixa && baixa.avisos));
 
