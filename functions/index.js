@@ -188,9 +188,99 @@ function decodificarTexto(buffer) {
 
 // Converte um arquivo anexado nos blocos que a API entende. Devolve null quando o formato
 // não é suportado. Usada tanto no envio quanto quando a IA pede pra reler um arquivo antigo.
-async function blocosDoArquivo(f) {
+// ---------------- PDF -> texto (antes da API) ----------------
+// Mandar o PDF cru faz a API cobrar o texto E uma imagem de cada página (alguns milhares de
+// tokens por página). Relatórios do Domínio e extratos são PDFs com texto de verdade: extraí-lo
+// aqui, por código, custa zero e vai pra IA por uma fração do preço. Quando o PDF é escaneado
+// ou tem página de imagem, extrair perderia conteúdo em silêncio, então nesses casos devolve
+// null e o PDF original segue como sempre foi.
+const PDF_PAGINA_POBRE_CHARS = 120;
+const PDF_MIN_CHARS_TOTAL = 200;
+const PDF_MAX_CHARS_TEXTO = 450000;
+
+function linhasDeUmaPaginaPdf(items) {
+  // itens só de espaço ficam de fora: o pdf.js os emite entre colunas distantes, e eles
+  // escondiam o salto de posição; o espaçamento é refeito pela distância entre os itens.
+  const itens = items.filter((i) => typeof i.str === "string" && i.str.trim() !== "" && i.transform);
+  itens.sort((a, b) => b.transform[5] - a.transform[5] || a.transform[4] - b.transform[4]);
+  const linhas = [];
+  for (const it of itens) {
+    const y = it.transform[5];
+    const h = Math.abs(it.height || it.transform[3] || 8) || 8;
+    const atual = linhas[linhas.length - 1];
+    if (atual && Math.abs(atual.y - y) <= Math.max(2, h * 0.4)) atual.itens.push(it);
+    else linhas.push({ y, itens: [it] });
+  }
+  return linhas.map((l) => {
+    l.itens.sort((a, b) => a.transform[4] - b.transform[4]);
+    let out = "";
+    let fim = null;
+    for (const it of l.itens) {
+      const x = it.transform[4];
+      const h = Math.abs(it.height || it.transform[3] || 8) || 8;
+      if (fim !== null) {
+        const gap = x - fim;
+        if (gap > h * 1.2) out += " | ";
+        else if (gap > h * 0.15 && !out.endsWith(" ") && !it.str.startsWith(" ")) out += " ";
+      }
+      out += it.str;
+      fim = x + (it.width || 0);
+    }
+    return out.replace(/\s+$/g, "");
+  }).filter((l) => l.trim() !== "");
+}
+
+async function pdfParaTexto(buffer) {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const doc = await pdfjs.getDocument({
+    data: new Uint8Array(buffer), useSystemFonts: true, disableFontFace: true, isEvalSupported: false, verbosity: 0,
+  }).promise;
+  try {
+    const paginas = [];
+    let total = 0;
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      const tc = await page.getTextContent();
+      const chars = tc.items.reduce((s, i) => s + String(i.str || "").trim().length, 0);
+      if (chars < PDF_PAGINA_POBRE_CHARS) {
+        // pouco texto: se a página tem imagem, o conteúdo provavelmente está nela — não dá pra converter
+        const ops = await page.getOperatorList();
+        const imagens = ops.fnArray.filter((fn) => fn === pdfjs.OPS.paintImageXObject
+          || fn === pdfjs.OPS.paintInlineImageXObject || fn === pdfjs.OPS.paintImageMaskXObject).length;
+        if (imagens > 0) return null;
+      }
+      const linhas = linhasDeUmaPaginaPdf(tc.items);
+      total += linhas.join("\n").length;
+      paginas.push(linhas);
+      page.cleanup();
+      if (total > PDF_MAX_CHARS_TEXTO) return null;
+    }
+    if (total < PDF_MIN_CHARS_TOTAL) return null;
+    return { paginas, total };
+  } finally {
+    await doc.destroy();
+  }
+}
+
+async function blocosDoArquivo(f, opcoes = {}) {
   const nomeMinusculo = (f.name || "").toLowerCase();
   if (f.mediaType === "application/pdf") {
+    if (!opcoes.original) {
+      try {
+        const r = await pdfParaTexto(Buffer.from(f.base64, "base64"));
+        if (r) {
+          console.log(`PDF ${f.name} enviado como texto (${r.paginas.length} página(s), ${r.total} caracteres)`);
+          const corpo = r.paginas.map((linhas, i) => `### Página ${i + 1}\n${linhas.join("\n")}`).join("\n\n");
+          return [{
+            type: "text",
+            text: `--- Conteúdo de ${f.name} (PDF convertido em texto pelo sistema: ${r.paginas.length} página(s); colunas separadas por " | "; imagens, logotipos e gráficos do PDF não vêm no texto — se precisar ver o visual, use buscar_arquivo com original=true) ---\n\n${corpo}`,
+          }];
+        }
+        console.log(`PDF ${f.name} mantido como PDF (escaneado/com página de imagem ou grande demais pra converter)`);
+      } catch (err) {
+        console.error(`Não consegui converter o PDF ${f.name} em texto, enviando o PDF original:`, err);
+      }
+    }
     return [{
       type: "document",
       source: { type: "base64", media_type: "application/pdf", data: f.base64 },
@@ -811,11 +901,12 @@ const FERRAMENTAS = [
   },
   {
     name: "buscar_arquivo",
-    description: "Reabre o arquivo original de um relatório que o usuário já enviou nesta empresa (a lista está no histórico de relatórios do prompt). Use quando precisar de um detalhe que não está no resumo — data exata, redação do histórico, valor de uma linha. Nunca peça ao usuário para reenviar um arquivo já enviado: use esta ferramenta. MAS reabrir um arquivo é caro e lento: só chame quando o resumo realmente não tiver o dado que a resposta exige, no máximo 1 ou 2 arquivos por resposta, e nunca para conversa, dúvida simples ou algo que o resumo, as observações ou o ESTADO SALVO já respondem.",
+    description: "Reabre o arquivo original de um relatório que o usuário já enviou nesta empresa (a lista está no histórico de relatórios do prompt). Use quando precisar de um detalhe que não está no resumo — data exata, redação do histórico, valor de uma linha. Nunca peça ao usuário para reenviar um arquivo já enviado: use esta ferramenta. MAS reabrir um arquivo é caro e lento: só chame quando o resumo realmente não tiver o dado que a resposta exige, no máximo 1 ou 2 arquivos por resposta, e nunca para conversa, dúvida simples ou algo que o resumo, as observações ou o ESTADO SALVO já respondem. PDFs de texto voltam convertidos em texto (bem mais barato); passe original=true só quando precisar ver o visual do PDF (imagem, carimbo, gráfico).",
     input_schema: {
       type: "object",
       properties: {
         nome: { type: "string", description: "Nome do arquivo como aparece no histórico de relatórios" },
+        original: { type: "boolean", description: "true = devolve o PDF original (com imagens) em vez do texto extraído. Só use se o texto não bastar; é bem mais caro." },
       },
       required: ["nome"],
     },
@@ -1776,7 +1867,7 @@ exports.assistenteChat = onCall(
         if (nome === "buscar_arquivo") {
           const pedido = String((entrada && entrada.nome) || "");
           const salvo = await carregarArquivoSalvo(db, empresaId, pedido);
-          const blocos = salvo ? await blocosDoArquivo(salvo) : null;
+          const blocos = salvo ? await blocosDoArquivo(salvo, { original: !!(entrada && entrada.original) }) : null;
           if (!blocos) {
             return {
               content: `Não encontrei "${pedido}" no acervo desta empresa. Responda com o que já tem; só peça ao usuário se for realmente indispensável.`,

@@ -37,7 +37,7 @@ function colRef(caminho) {
     const docs = [...banco.keys()]
       .filter((k) => k.startsWith(caminho + '/') && !k.slice(caminho.length + 1).includes('/'))
       .map((k) => ({ id: k.split('/').pop(), data: () => banco.get(k), ref: docRef(k) }));
-    return { docs, empty: docs.length === 0, size: docs.length };
+    return { docs, empty: docs.length === 0, size: docs.length, forEach: (fn) => docs.forEach(fn) };
   };
   const q = { orderBy: () => q, limit: () => q, get: listar };
   return {
@@ -149,6 +149,44 @@ const pedido = (message, history = []) => handler({
 const mensagensSalvas = () => [...banco.entries()].filter(([k]) => k.includes('/mensagens/')).map(([, v]) => v);
 const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, complemento: 'Tarifa bancaria', codigoEmp: '185' };
 
+
+// ---------- PDFs mínimos gerados em código (pra testar a conversão em texto) ----------
+function criarPdf(paginas) {
+  const objs = [];
+  const kids = paginas.map((_, i) => `${4 + i * 2} 0 R`).join(' ');
+  objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+  objs[2] = `<< /Type /Pages /Kids [${kids}] /Count ${paginas.length} >>`;
+  objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>';
+  paginas.forEach((c, i) => {
+    const n = 4 + i * 2;
+    objs[n] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${n + 1} 0 R /Resources << /Font << /F1 3 0 R >> >> >>`;
+    objs[n + 1] = `<< /Length ${c.length} >>\nstream\n${c}\nendstream`;
+  });
+  let pdf = '%PDF-1.4\n';
+  const offs = [];
+  for (let i = 1; i < objs.length; i++) { offs[i] = pdf.length; pdf += `${i} 0 obj\n${objs[i]}\nendobj\n`; }
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objs.length}\n0000000000 65535 f \n`;
+  for (let i = 1; i < objs.length; i++) pdf += `${String(offs[i]).padStart(10, '0')} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objs.length} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf, 'latin1');
+}
+const txtPdf = (x, y, t) => `BT /F1 10 Tf ${x} ${y} Td (${t}) Tj ET\n`;
+const PDF_TEXTO = criarPdf([
+  txtPdf(50, 700, 'EXTRATO DE CONTA CORRENTE - BANCO TESTE') + txtPdf(50, 680, 'Data') + txtPdf(300, 680, 'Valor')
+  + txtPdf(50, 660, '31/08 TARIFA COBRANCA') + txtPdf(300, 660, 'R$ 42,00D')
+  + txtPdf(50, 640, '31/08 CREDITO LIQUIDACAO COBRANCA') + txtPdf(300, 640, 'R$ 34.650,00C')
+  + txtPdf(50, 620, 'Saldo final do periodo conforme documento original do banco')
+  + txtPdf(50, 600, 'Linha extra para o texto passar do minimo exigido pela regra de conversao'),
+]);
+const PDF_COM_IMAGEM = criarPdf([
+  txtPdf(50, 700, 'SAC 0800') + 'q 100 0 0 100 50 500 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q\n',
+]);
+const arquivoPdf = (nome, buf) => ({ name: nome, mediaType: 'application/pdf', base64: buf.toString('base64') });
+const pedidoComArquivos = (message, files) => handler({
+  auth: { token: { email: 'contabilidadecricon@gmail.com' } },
+  data: { empresaId: 'mv', message, history: [], files },
+});
 (async () => {
   console.log('1) gera arquivo pela ferramenta');
   prepararEmpresa();
@@ -364,6 +402,50 @@ const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, com
   confere('repetição saiu sem ttl (cache padrão)', chamadas[1].system[0].cache_control && chamadas[1].system[0].cache_control.ttl === undefined);
   const ultimaMsg = chamadas[2].messages[chamadas[2].messages.length - 1];
   confere('na 2ª rodada o último resultado de ferramenta vira ponto de cache', Array.isArray(ultimaMsg.content) && ultimaMsg.content[ultimaMsg.content.length - 1].cache_control);
+
+  console.log('\n10d) PDF de texto vai pra IA como texto; PDF com página de imagem segue como PDF');
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('segue o extrato', [arquivoPdf('extrato.pdf', PDF_TEXTO)]);
+  let blocosEnviados = chamadas[0].messages[chamadas[0].messages.length - 1].content;
+  const blocoTexto = blocosEnviados.find((b) => b.type === 'text' && b.text.includes('PDF convertido em texto'));
+  confere('PDF de texto virou bloco de texto (não "document")', !!blocoTexto && !blocosEnviados.some((b) => b.type === 'document'));
+  confere('colunas separadas por " | " e valores preservados', blocoTexto && blocoTexto.text.includes('Data | Valor') && blocoTexto.text.includes('R$ 34.650,00C'), blocoTexto && blocoTexto.text.slice(0, 400));
+  confere('avisa a IA que existe original=true', blocoTexto && blocoTexto.text.includes('original=true'));
+
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('segue o extrato escaneado', [arquivoPdf('escaneado.pdf', PDF_COM_IMAGEM)]);
+  blocosEnviados = chamadas[0].messages[chamadas[0].messages.length - 1].content;
+  confere('página com imagem e pouco texto mantém o PDF original', blocosEnviados.some((b) => b.type === 'document'));
+
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('PDF quebrado', [arquivoPdf('quebrado.pdf', Buffer.from('isto nao e um pdf'))]);
+  blocosEnviados = chamadas[0].messages[chamadas[0].messages.length - 1].content;
+  confere('PDF ilegível cai pro original em vez de quebrar a conversa', blocosEnviados.some((b) => b.type === 'document'));
+
+  console.log('\n10e) buscar_arquivo devolve texto por padrão e o PDF original com original=true');
+  prepararEmpresa();
+  roteiro = [resp([txt('guardei')], 'end_turn')];
+  await pedidoComArquivos('guarda esse extrato', [arquivoPdf('rel.pdf', PDF_TEXTO)]);
+  chamadas.length = 0;
+  roteiro = [
+    resp([uso('buscar_arquivo', { nome: 'rel.pdf' })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      const tipos = Array.isArray(res.content) ? res.content.map((b) => b.type).join(',') : String(res.content);
+      confere('por padrão reabre em texto', !res.is_error && tipos === 'text,text', tipos);
+      return resp([uso('buscar_arquivo', { nome: 'rel.pdf', original: true })], 'tool_use');
+    },
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      const tipos = Array.isArray(res.content) ? res.content.map((b) => b.type).join(',') : String(res.content);
+      confere('com original=true reabre o PDF', !res.is_error && tipos === 'text,document', tipos);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('olha de novo o rel.pdf');
 
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
