@@ -527,6 +527,19 @@
   .anexo-frame { width: 100%; height: 68vh; border: 0; border-radius: 8px; background: #fff; }
   .anexo-texto { white-space: pre-wrap; word-break: break-word; font-size: 0.75rem; color: var(--text); margin: 0; }
   .anexo-aviso { font-size: 0.85rem; color: var(--text-dim); padding: 12px 4px; }
+  .pag-toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; font-size: 0.8rem; color: var(--text-dim); }
+  .pag-toolbar button { padding: 5px 10px; border-radius: 8px; border: 1px solid var(--panel-border); background: none; color: var(--text-dim); cursor: pointer; font-size: 0.78rem; }
+  .pag-toolbar button:hover, .pag-toolbar button:focus-visible { color: var(--text); border-color: var(--text-dim); outline: none; }
+  .pag-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+  .pag-card { border: 1px solid var(--panel-border); border-radius: 10px; padding: 8px; background: rgba(255,255,255,0.03); display: flex; flex-direction: column; gap: 6px; }
+  .pag-card.fora { opacity: 0.45; border-style: dashed; }
+  .pag-topo { display: flex; align-items: center; justify-content: space-between; font-size: 0.78rem; }
+  .pag-topo label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  .pag-topo input { width: auto; }
+  .pag-zoom { background: none; border: none; cursor: pointer; color: var(--text-dim); font-size: 0.9rem; }
+  .pag-thumb { width: 100%; min-height: 120px; background: #fff; border-radius: 6px; display: block; }
+  .pag-aviso { font-size: 0.72rem; color: var(--text-faint); margin-top: 10px; line-height: 1.45; }
+  .pag-grande canvas { max-width: 100%; background: #fff; border-radius: 8px; display: block; margin: 8px auto 0; }
 
   /* ---------- notes drawer ---------- */
   .drawer-overlay {
@@ -861,6 +874,7 @@
     <div class="anexo-body" id="anexoCorpo"></div>
     <div class="modal-actions">
       <button class="modal-btn-cancel" id="anexoFechar" type="button">Fechar</button>
+      <button class="modal-btn-confirm" id="anexoAplicar" type="button" hidden>Aplicar</button>
     </div>
   </div>
 </div>
@@ -1899,9 +1913,137 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     messageInput.focus();
   });
 
+  // PDF reduzido (só com as páginas marcadas) -> { original, marcadas }. Guarda o original pra dar
+  // pra reabrir o seletor e desfazer a seleção; limpa quando a mensagem é enviada.
+  const pdfOrigem = new Map();
+
+  // Mostra as páginas do PDF em miniaturas com caixa de marcar. Quem desmarca uma página tira
+  // ela do que vai pra IA (e do arquivo guardado no histórico) — por isso nada é automático:
+  // só uma pessoa sabe se um rodapé com imagem é inútil ou é dado escaneado.
+  async function montarSeletorPaginas(f, indice, corpo, aplicarBtn) {
+    const origem = pdfOrigem.get(f) || { original: f, marcadas: null };
+    const bytes = new Uint8Array(await origem.original.arrayBuffer());
+    const doc = await pdfjsLib.getDocument({ data: bytes.slice() }).promise;
+    const n = doc.numPages;
+    const marcadas = Array.from({ length: n }, (_, k) => (origem.marcadas && origem.marcadas.length === n ? !!origem.marcadas[k] : true));
+
+    corpo.textContent = '';
+    const toolbar = document.createElement('div');
+    toolbar.className = 'pag-toolbar';
+    const contador = document.createElement('span');
+    const btnTodas = document.createElement('button');
+    btnTodas.type = 'button'; btnTodas.textContent = 'Marcar todas';
+    const btnNenhuma = document.createElement('button');
+    btnNenhuma.type = 'button'; btnNenhuma.textContent = 'Desmarcar todas';
+    toolbar.append(contador, btnTodas, btnNenhuma);
+    const grade = document.createElement('div');
+    grade.className = 'pag-grid';
+    const aviso = document.createElement('div');
+    aviso.className = 'pag-aviso';
+    aviso.textContent = 'Só as páginas marcadas vão pra IA e ficam guardadas no histórico deste relatório. Desmarque o que for realmente inútil (avisos legais, ouvidoria, páginas em branco); se tiver dúvida, deixe marcado.';
+    const grande = document.createElement('div');
+    grande.className = 'pag-grande';
+    grande.hidden = true;
+    corpo.append(toolbar, grade, aviso, grande);
+
+    const cards = [];
+    let fila = Promise.resolve();
+    function renderizar(num, canvas, larguraAlvo) {
+      fila = fila.then(async () => {
+        try {
+          const page = await doc.getPage(num);
+          const v1 = page.getViewport({ scale: 1 });
+          const vp = page.getViewport({ scale: larguraAlvo / v1.width });
+          canvas.width = Math.floor(vp.width);
+          canvas.height = Math.floor(vp.height);
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return;
+          await page.render({ canvasContext: ctx, viewport: vp }).promise;
+        } catch (err) {
+          console.warn('Não consegui desenhar a página', num, err);
+        }
+      });
+      return fila;
+    }
+    const observador = typeof IntersectionObserver !== 'undefined'
+      ? new IntersectionObserver((entradas) => {
+        entradas.forEach((e) => {
+          if (!e.isIntersecting) return;
+          observador.unobserve(e.target);
+          renderizar(Number(e.target.dataset.pagina), e.target.querySelector('canvas'), 300);
+        });
+      }, { root: corpo, rootMargin: '200px' })
+      : null;
+
+    function atualizar() {
+      const qtd = marcadas.filter(Boolean).length;
+      contador.textContent = `${qtd} de ${n} página(s) marcada(s)`;
+      cards.forEach((c, k) => c.classList.toggle('fora', !marcadas[k]));
+      aplicarBtn.disabled = qtd === 0;
+      aplicarBtn.textContent = qtd === n ? (pdfOrigem.has(f) ? 'Voltar ao PDF inteiro' : 'Enviar o PDF inteiro') : `Enviar só ${qtd} de ${n} página(s)`;
+    }
+    for (let k = 0; k < n; k++) {
+      const card = document.createElement('div');
+      card.className = 'pag-card';
+      card.dataset.pagina = String(k + 1);
+      const topo = document.createElement('div');
+      topo.className = 'pag-topo';
+      const rotulo = document.createElement('label');
+      const caixa = document.createElement('input');
+      caixa.type = 'checkbox';
+      caixa.checked = marcadas[k];
+      caixa.addEventListener('change', () => { marcadas[k] = caixa.checked; atualizar(); });
+      rotulo.append(caixa, document.createTextNode(`Pág. ${k + 1}`));
+      const zoom = document.createElement('button');
+      zoom.type = 'button'; zoom.className = 'pag-zoom'; zoom.title = 'Ampliar esta página'; zoom.textContent = '🔍';
+      zoom.addEventListener('click', () => {
+        grande.textContent = '';
+        const voltar = document.createElement('button');
+        voltar.type = 'button'; voltar.className = 'modal-btn-cancel'; voltar.textContent = `← Voltar às páginas (página ${k + 1})`;
+        voltar.style.cssText = 'padding:6px 12px;border-radius:8px;cursor:pointer;';
+        const cv = document.createElement('canvas');
+        grande.append(voltar, cv);
+        toolbar.hidden = grade.hidden = aviso.hidden = true;
+        grande.hidden = false;
+        voltar.addEventListener('click', () => { grande.hidden = true; toolbar.hidden = grade.hidden = aviso.hidden = false; });
+        renderizar(k + 1, cv, 900);
+      });
+      topo.append(rotulo, zoom);
+      const cv = document.createElement('canvas');
+      cv.className = 'pag-thumb';
+      card.append(topo, cv);
+      grade.appendChild(card);
+      cards.push(card);
+      if (observador) observador.observe(card); else renderizar(k + 1, cv, 300);
+    }
+    btnTodas.addEventListener('click', () => { marcadas.fill(true); grade.querySelectorAll('input').forEach((c) => { c.checked = true; }); atualizar(); });
+    btnNenhuma.addEventListener('click', () => { marcadas.fill(false); grade.querySelectorAll('input').forEach((c) => { c.checked = false; }); atualizar(); });
+    aplicarBtn.hidden = false;
+    atualizar();
+
+    return async function aplicarSelecao() {
+      if (marcadas.every(Boolean)) {
+        pendingFiles[indice] = origem.original;
+        pdfOrigem.delete(f);
+      } else {
+        const src = await PDFLib.PDFDocument.load(bytes);
+        const novo = await PDFLib.PDFDocument.create();
+        const indices = marcadas.map((m, k) => (m ? k : -1)).filter((k) => k >= 0);
+        const paginas = await novo.copyPages(src, indices);
+        paginas.forEach((p) => novo.addPage(p));
+        const saida = await novo.save();
+        const reduzido = new File([saida], origem.original.name, { type: 'application/pdf' });
+        pdfOrigem.set(reduzido, { original: origem.original, marcadas: marcadas.slice() });
+        pdfOrigem.delete(f);
+        pendingFiles[indice] = reduzido;
+      }
+      renderAttachPreview();
+    };
+  }
+
   // Miniaturas e pré-visualização usam object URLs; guarda pra liberar a memória a cada redesenho.
   let miniaturasUrls = [];
-  function abrirPreviewAnexo(f) {
+  function abrirPreviewAnexo(f, indice) {
     const overlay = document.getElementById('anexoOverlay');
     const corpo = document.getElementById('anexoCorpo');
     const fechar = document.getElementById('anexoFechar');
@@ -1916,10 +2058,21 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       img.className = 'anexo-img'; img.src = url; img.alt = nome;
       corpo.appendChild(img);
     } else if (tipo === 'application/pdf' || /\.pdf$/i.test(nome)) {
-      const url = URL.createObjectURL(f); urls.push(url);
-      const frame = document.createElement('iframe');
-      frame.className = 'anexo-frame'; frame.src = url; frame.title = nome;
-      corpo.appendChild(frame);
+      const carregando = document.createElement('div');
+      carregando.className = 'anexo-aviso';
+      carregando.textContent = 'Carregando as páginas...';
+      corpo.appendChild(carregando);
+      const aplicarBtn = document.getElementById('anexoAplicar');
+      montarSeletorPaginas(f, indice, corpo, aplicarBtn).then((fn) => {
+        aplicarSelecaoPdf = fn;
+      }).catch((err) => {
+        console.warn('Seletor de páginas indisponível, mostrando o PDF direto:', err);
+        corpo.textContent = '';
+        const url = URL.createObjectURL(f); urls.push(url);
+        const frame = document.createElement('iframe');
+        frame.className = 'anexo-frame'; frame.src = url; frame.title = nome;
+        corpo.appendChild(frame);
+      });
     } else if (tipo.startsWith('text/') || /\.(txt|csv|ofx)$/i.test(nome)) {
       const pre = document.createElement('pre');
       pre.className = 'anexo-texto'; pre.textContent = 'Carregando...';
@@ -1932,11 +2085,30 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       aviso.textContent = 'Não dá pra mostrar este tipo de arquivo aqui (Excel, por exemplo), mas ele vai normalmente pra IA.';
       corpo.appendChild(aviso);
     }
+    const aplicarBtnModal = document.getElementById('anexoAplicar');
+    let aplicarSelecaoPdf = null;
+    async function onAplicar() {
+      if (!aplicarSelecaoPdf) return;
+      aplicarBtnModal.disabled = true;
+      try {
+        await aplicarSelecaoPdf();
+        fecharModal();
+      } catch (err) {
+        console.error('Erro montando o PDF com as páginas marcadas', err);
+        alert('Não consegui montar o PDF só com as páginas marcadas (o arquivo pode estar protegido). Ele segue inteiro.');
+        aplicarBtnModal.disabled = false;
+      }
+    }
+    aplicarBtnModal.hidden = true;
+    aplicarBtnModal.addEventListener('click', onAplicar);
     function fecharModal() {
       overlay.classList.remove('show');
       overlay.removeEventListener('keydown', onKey);
       overlay.removeEventListener('click', onFundo);
       fechar.removeEventListener('click', fecharModal);
+      aplicarBtnModal.removeEventListener('click', onAplicar);
+      aplicarBtnModal.hidden = true;
+      aplicarSelecaoPdf = null;
       corpo.textContent = '';
       urls.forEach((u) => URL.revokeObjectURL(u));
     }
@@ -1968,14 +2140,18 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       nomeBtn.type = 'button';
       nomeBtn.className = 'attach-name';
       nomeBtn.title = 'Clique pra ver o arquivo antes de enviar';
-      nomeBtn.textContent = f.name;
-      nomeBtn.addEventListener('click', () => abrirPreviewAnexo(f));
+      const reduzido = pdfOrigem.get(f);
+      nomeBtn.textContent = reduzido
+        ? `${f.name} (${reduzido.marcadas.filter(Boolean).length} de ${reduzido.marcadas.length} págs)`
+        : f.name;
+      nomeBtn.addEventListener('click', () => abrirPreviewAnexo(f, i));
       chip.append(nomeBtn, document.createTextNode(' '));
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.dataset.i = String(i);
       remove.textContent = '✕';
       remove.addEventListener('click', () => {
+        pdfOrigem.delete(pendingFiles[i]);
         pendingFiles.splice(i, 1);
         renderAttachPreview();
       });
@@ -2063,6 +2239,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       messageInput.value = "";
       messageInput.style.height = 'auto';
       pendingFiles = [];
+      pdfOrigem.clear();
       renderAttachPreview();
 
       const result = await assistenteChat({
@@ -2322,6 +2499,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
      Fornecedores — trazido pra dentro do Stagiario pra não precisar abrir outra ferramenta.
      Mesmo parser/UI daquela ferramenta, só trocando a casca visual pro tema do Stagiario. ---------------- -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script>
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
