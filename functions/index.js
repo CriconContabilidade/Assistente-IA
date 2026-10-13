@@ -234,11 +234,36 @@ function linhasDeUmaPaginaPdf(items) {
   }).filter((l) => l.trim() !== "");
 }
 
-async function pdfParaTexto(buffer) {
+// Abre o PDF; se estiver protegido, tenta as senhas candidatas (a que o usuário digitou na tela
+// e as já salvas desta empresa). Só o pdf.js mexe na senha: ela nunca vai pra IA.
+async function abrirPdfComSenhas(pdfjs, buffer, obterCandidatas) {
+  const base = { useSystemFonts: true, disableFontFace: true, isEvalSupported: false, verbosity: 0 };
+  const abrir = (senha) => pdfjs.getDocument({ ...base, data: new Uint8Array(buffer), ...(senha ? { password: senha } : {}) }).promise;
+  try {
+    return { doc: await abrir(null), protegido: false, senha: null };
+  } catch (err) {
+    if (!err || err.name !== "PasswordException") throw err;
+  }
+  const candidatas = [...new Set((await obterCandidatas()).filter((x) => typeof x === "string" && x))];
+  for (const senha of candidatas) {
+    try {
+      return { doc: await abrir(senha), protegido: true, senha };
+    } catch (err) {
+      if (!err || err.name !== "PasswordException") throw err;
+    }
+  }
+  return { doc: null, protegido: true, senha: null };
+}
+
+// Devolve { ok:true, paginas, total, protegido, senhaUsada } ou { ok:false, motivo, protegido }
+// (motivo: "senha" = protegido e nenhuma senha serviu; "imagem" = página escaneada/com imagem;
+// "grande"; "pouco").
+async function pdfParaTexto(buffer, obterCandidatas = async () => []) {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const doc = await pdfjs.getDocument({
-    data: new Uint8Array(buffer), useSystemFonts: true, disableFontFace: true, isEvalSupported: false, verbosity: 0,
-  }).promise;
+  const aberto = await abrirPdfComSenhas(pdfjs, buffer, obterCandidatas);
+  if (!aberto.doc) return { ok: false, motivo: "senha", protegido: true };
+  const doc = aberto.doc;
+  const recusa = (motivo) => ({ ok: false, motivo, protegido: aberto.protegido });
   try {
     const paginas = [];
     let total = 0;
@@ -251,16 +276,16 @@ async function pdfParaTexto(buffer) {
         const ops = await page.getOperatorList();
         const imagens = ops.fnArray.filter((fn) => fn === pdfjs.OPS.paintImageXObject
           || fn === pdfjs.OPS.paintInlineImageXObject || fn === pdfjs.OPS.paintImageMaskXObject).length;
-        if (imagens > 0) return null;
+        if (imagens > 0) return recusa("imagem");
       }
       const linhas = linhasDeUmaPaginaPdf(tc.items);
       total += linhas.join("\n").length;
       paginas.push(linhas);
       page.cleanup();
-      if (total > PDF_MAX_CHARS_TEXTO) return null;
+      if (total > PDF_MAX_CHARS_TEXTO) return recusa("grande");
     }
-    if (total < PDF_MIN_CHARS_TOTAL) return null;
-    return { paginas, total };
+    if (total < PDF_MIN_CHARS_TOTAL) return recusa("pouco");
+    return { ok: true, paginas, total, protegido: aberto.protegido, senhaUsada: aberto.senha };
   } finally {
     await doc.destroy();
   }
@@ -269,22 +294,39 @@ async function pdfParaTexto(buffer) {
 async function blocosDoArquivo(f, opcoes = {}) {
   const nomeMinusculo = (f.name || "").toLowerCase();
   if (f.mediaType === "application/pdf") {
-    if (!opcoes.original) {
-      try {
-        const r = await pdfParaTexto(Buffer.from(f.base64, "base64"));
-        if (r) {
-          console.log(`PDF ${f.name} enviado como texto (${r.paginas.length} página(s), ${r.total} caracteres)`);
-          const corpo = r.paginas.map((linhas, i) => `### Página ${i + 1}\n${linhas.join("\n")}`).join("\n\n");
-          return [{
-            type: "text",
-            text: `--- Conteúdo de ${f.name} (PDF convertido em texto pelo sistema: ${r.paginas.length} página(s); colunas separadas por " | "; imagens, logotipos e gráficos do PDF não vêm no texto — se precisar ver o visual, use buscar_arquivo com original=true) ---\n\n${corpo}`,
-          }];
-        }
-        console.log(`PDF ${f.name} mantido como PDF (escaneado/com página de imagem ou grande demais pra converter)`);
-      } catch (err) {
-        console.error(`Não consegui converter o PDF ${f.name} em texto, enviando o PDF original:`, err);
-      }
+    // opcoes.obterSenhas() devolve as senhas já salvas da empresa; f.senha é a que o usuário
+    // digitou ao anexar. A API não lê PDF protegido, então um PDF que precisou de senha nunca
+    // segue como "document" cru: ou vai como texto, ou a IA recebe o aviso do que fazer.
+    const obterCandidatas = async () => [
+      ...(typeof f.senha === "string" && f.senha ? [f.senha] : []),
+      ...(opcoes.obterSenhas ? await opcoes.obterSenhas() : []),
+    ];
+    let r = null;
+    try {
+      r = await pdfParaTexto(Buffer.from(f.base64, "base64"), obterCandidatas);
+    } catch (err) {
+      console.error(`Não consegui converter o PDF ${f.name} em texto, enviando o PDF original:`, err);
     }
+    if (r && r.ok && r.senhaUsada && opcoes.aoUsarSenha) {
+      try { await opcoes.aoUsarSenha(r.senhaUsada, f); } catch (err) { console.error("Erro salvando a senha do PDF:", err.message); }
+    }
+    if (r && r.ok && (!opcoes.original || r.protegido)) {
+      console.log(`PDF ${f.name} enviado como texto (${r.paginas.length} página(s), ${r.total} caracteres${r.protegido ? ", protegido por senha" : ""})`);
+      const corpo = r.paginas.map((linhas, i) => `### Página ${i + 1}\n${linhas.join("\n")}`).join("\n\n");
+      const aviso = opcoes.original && r.protegido ? " O PDF original não pode ser enviado porque tem senha; este é o texto extraído." : "";
+      return [{
+        type: "text",
+        text: `--- Conteúdo de ${f.name} (PDF convertido em texto pelo sistema: ${r.paginas.length} página(s); colunas separadas por " | "; imagens, logotipos e gráficos do PDF não vêm no texto — se precisar ver o visual, use buscar_arquivo com original=true)${aviso} ---\n\n${corpo}`,
+      }];
+    }
+    if (r && r.protegido) {
+      const motivo = r.motivo === "senha"
+        ? "o arquivo tem senha e nenhuma senha salva ou digitada serviu. Diga ao usuário para anexá-lo de novo e digitar a senha na janela que abre ao anexar (a senha não passa pelo chat e fica salva só nesta empresa)"
+        : "o arquivo tem senha e também páginas em imagem, e a API não lê PDF protegido. Diga ao usuário para remover a senha do PDF antes de enviar";
+      console.log(`PDF ${f.name} protegido: não foi possível enviar (${r.motivo})`);
+      return [{ type: "text", text: `--- ${f.name}: NÃO consegui ler este PDF: ${motivo}. Não invente nenhum dado dele. ---` }];
+    }
+    if (r && !r.ok) console.log(`PDF ${f.name} mantido como PDF (${r.motivo})`);
     return [{
       type: "document",
       source: { type: "base64", media_type: "application/pdf", data: f.base64 },
@@ -1458,9 +1500,38 @@ exports.assistenteChat = onCall(
     const arquivosNaoLidos = [];
     const arquivosParaGuardar = [];
     let totalBase64Chars = 0;
+    // Senhas de PDF desta empresa: ficam só no servidor (subcoleção que as regras do Firestore
+    // não liberam pro navegador) e nunca entram em prompt, log ou histórico.
+    const senhasPdfRef = empresaRef.collection("segredos").doc("senhasPdf");
+    let senhasPdfCache = null;
+    async function senhasSalvasPdf() {
+      if (senhasPdfCache) return senhasPdfCache;
+      senhasPdfCache = [];
+      try {
+        const snap = await senhasPdfRef.get();
+        const lista = snap.exists ? (snap.data() || {}).lista : null;
+        if (Array.isArray(lista)) senhasPdfCache = lista.map((x) => x && x.senha).filter((x) => typeof x === "string" && x);
+      } catch (err) {
+        console.error("Erro lendo as senhas de PDF salvas:", err.message);
+      }
+      return senhasPdfCache;
+    }
+    async function lembrarSenhaPdf(senha, f) {
+      if (f && f.lembrarSenha === false) return;
+      const atuais = await senhasSalvasPdf();
+      if (atuais.includes(senha)) return;
+      const nova = [senha, ...atuais].slice(0, 10);
+      await senhasPdfRef.set({ lista: nova.map((x) => ({ senha: x })), atualizadoEm: FieldValue.serverTimestamp() });
+      senhasPdfCache = nova;
+      log(`senha de PDF salva pra esta empresa (${nova.length} na lista)`);
+    }
+    const opcoesPdf = { obterSenhas: senhasSalvasPdf, aoUsarSenha: lembrarSenhaPdf };
     for (const f of files || []) {
       if (!f || typeof f.base64 !== "string" || typeof f.mediaType !== "string" || typeof f.name !== "string") {
         throw new HttpsError("invalid-argument", "Um dos arquivos enviados é inválido.");
+      }
+      if (f.senha != null && (typeof f.senha !== "string" || f.senha.length > 200)) {
+        throw new HttpsError("invalid-argument", "Senha de PDF inválida.");
       }
       totalBase64Chars += f.base64.length;
       if (totalBase64Chars > MAX_TOTAL_BASE64_CHARS) {
@@ -1469,7 +1540,7 @@ exports.assistenteChat = onCall(
       if (f.base64.length > MAX_FILE_BASE64_CHARS) {
         throw new HttpsError("invalid-argument", `Arquivo "${f.name}" é grande demais.`);
       }
-      const blocos = await blocosDoArquivo(f);
+      const blocos = await blocosDoArquivo(f, opcoesPdf);
       if (blocos) {
         contentBlocks.push(...blocos);
         arquivosParaGuardar.push(f);
@@ -1877,7 +1948,7 @@ exports.assistenteChat = onCall(
         if (nome === "buscar_arquivo") {
           const pedido = String((entrada && entrada.nome) || "");
           const salvo = await carregarArquivoSalvo(db, empresaId, pedido);
-          const blocos = salvo ? await blocosDoArquivo(salvo, { original: !!(entrada && entrada.original) }) : null;
+          const blocos = salvo ? await blocosDoArquivo(salvo, { ...opcoesPdf, original: !!(entrada && entrada.original) }) : null;
           if (!blocos) {
             return {
               content: `Não encontrei "${pedido}" no acervo desta empresa. Responda com o que já tem; só peça ao usuário se for realmente indispensável.`,

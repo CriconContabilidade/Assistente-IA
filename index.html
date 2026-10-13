@@ -868,6 +868,24 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="senhaOverlay">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="senhaTitulo">
+    <h3 id="senhaTitulo">PDF protegido por senha</h3>
+    <div id="senhaArquivo" style="font-size:0.85rem;font-weight:600;margin-bottom:10px;word-break:break-word;"></div>
+    <input type="password" id="senhaCampo" placeholder="Senha do PDF" autocomplete="off">
+    <label class="modal-label" style="display:flex;align-items:center;gap:8px;margin-top:10px;cursor:pointer;">
+      <input type="checkbox" id="senhaLembrar" checked style="width:auto;"> Lembrar esta senha nesta empresa
+    </label>
+    <div class="modal-dica">A senha vai direto pro servidor e fica guardada só nele; a IA nunca a vê e ela não aparece no chat.</div>
+    <div id="senhaErro" class="modal-dica" style="color:var(--danger);" hidden></div>
+    <div class="modal-actions">
+      <button class="modal-btn-cancel" id="senhaCancelar" type="button">Não anexar</button>
+      <button class="modal-btn-cancel" id="senhaUsarSalva" type="button" title="Se esta empresa já tem a senha guardada, o servidor tenta com ela">Usar a salva</button>
+      <button class="modal-btn-confirm" id="senhaConfirmar" type="button">Confirmar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="anexoOverlay">
   <div class="modal-card anexo-card" role="dialog" aria-modal="true" aria-labelledby="anexoTitulo">
     <h3 id="anexoTitulo">Arquivo</h3>
@@ -1875,9 +1893,9 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
 
   attachBtn.addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => {
-    pendingFiles.push(...Array.from(fileInput.files));
-    renderAttachPreview();
+    const novos = Array.from(fileInput.files);
     fileInput.value = "";
+    anexarArquivos(novos);
   });
 
   ['dragenter', 'dragover'].forEach(evt => {
@@ -1888,8 +1906,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   });
   composer.addEventListener('drop', e => {
     if (e.dataTransfer.files.length) {
-      pendingFiles.push(...Array.from(e.dataTransfer.files));
-      renderAttachPreview();
+      anexarArquivos(Array.from(e.dataTransfer.files));
     }
   });
 
@@ -1908,14 +1925,97 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       .filter(Boolean);
     if (!arquivosColados.length) return;
     e.preventDefault();
-    pendingFiles.push(...arquivosColados);
-    renderAttachPreview();
+    anexarArquivos(arquivosColados);
     messageInput.focus();
   });
 
   // PDF reduzido (só com as páginas marcadas) -> { original, marcadas }. Guarda o original pra dar
   // pra reabrir o seletor e desfazer a seleção; limpa quando a mensagem é enviada.
   const pdfOrigem = new Map();
+
+  // PDFs com senha: File -> { senha, lembrar }. A senha só vive aqui até o envio, vai ao servidor
+  // por HTTPS junto com o arquivo e nunca entra no chat.
+  const pdfSenhas = new Map();
+  const ehPdf = (f) => f && (f.type === 'application/pdf' || /\.pdf$/i.test(String(f.name || '')));
+  async function abrirPdfParaTestar(f, senha) {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    const doc = await pdfjsLib.getDocument({ data: bytes, ...(senha ? { password: senha } : {}) }).promise;
+    if (doc && doc.destroy) doc.destroy();
+  }
+  async function pdfEstaProtegido(f) {
+    try { await abrirPdfParaTestar(f, null); return false; } catch (err) { return !!err && err.name === 'PasswordException'; }
+  }
+  async function senhaPdfServe(f, senha) {
+    try { await abrirPdfParaTestar(f, senha); return true; } catch (err) { return !(err && err.name === 'PasswordException'); }
+  }
+  // Devolve 'cancelar', 'salva' (servidor tenta a senha já guardada) ou { senha, lembrar }.
+  function pedirSenhaPdf(f, erro) {
+    const overlay = document.getElementById('senhaOverlay');
+    const campo = document.getElementById('senhaCampo');
+    const lembrar = document.getElementById('senhaLembrar');
+    const msgErro = document.getElementById('senhaErro');
+    document.getElementById('senhaArquivo').textContent = f.name;
+    campo.value = '';
+    msgErro.hidden = !erro;
+    msgErro.textContent = erro || '';
+    return new Promise((resolve) => {
+      function fechar(r) {
+        overlay.classList.remove('show');
+        overlay.removeEventListener('keydown', onKey);
+        document.getElementById('senhaCancelar').removeEventListener('click', onCancelar);
+        document.getElementById('senhaUsarSalva').removeEventListener('click', onSalva);
+        document.getElementById('senhaConfirmar').removeEventListener('click', onConfirmar);
+        campo.value = '';
+        resolve(r);
+      }
+      function onCancelar() { fechar('cancelar'); }
+      function onSalva() { fechar('salva'); }
+      function onConfirmar() { if (campo.value) fechar({ senha: campo.value, lembrar: lembrar.checked }); else campo.focus(); }
+      function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); fechar('cancelar'); }
+        else if (e.key === 'Enter' && e.target === campo) { e.preventDefault(); onConfirmar(); }
+      }
+      overlay.addEventListener('keydown', onKey);
+      document.getElementById('senhaCancelar').addEventListener('click', onCancelar);
+      document.getElementById('senhaUsarSalva').addEventListener('click', onSalva);
+      document.getElementById('senhaConfirmar').addEventListener('click', onConfirmar);
+      overlay.classList.add('show');
+      setTimeout(() => campo.focus(), 0);
+    });
+  }
+  async function tratarPdfsProtegidos(arquivos) {
+    for (const f of arquivos) {
+      if (!ehPdf(f) || typeof pdfjsLib === 'undefined') continue;
+      if (!(await pdfEstaProtegido(f))) continue;
+      let erro = '';
+      for (;;) {
+        const r = await pedirSenhaPdf(f, erro);
+        if (r === 'cancelar') {
+          const i = pendingFiles.indexOf(f);
+          if (i >= 0) pendingFiles.splice(i, 1);
+          break;
+        }
+        if (r === 'salva') break;
+        if (await senhaPdfServe(f, r.senha)) { pdfSenhas.set(f, r); break; }
+        erro = 'Senha incorreta. Tente de novo.';
+      }
+    }
+    renderAttachPreview();
+  }
+  async function anexarArquivos(lista) {
+    pendingFiles.push(...lista);
+    renderAttachPreview();
+    await tratarPdfsProtegidos(lista);
+  }
+  async function arquivoParaEnvio(f) {
+    const s = pdfSenhas.get(f);
+    return {
+      name: f.name,
+      mediaType: f.type || 'application/octet-stream',
+      base64: await fileToBase64(f),
+      ...(s ? { senha: s.senha, lembrarSenha: s.lembrar } : {}),
+    };
+  }
 
   // Mostra as páginas do PDF em miniaturas com caixa de marcar. Quem desmarca uma página tira
   // ela do que vai pra IA (e do arquivo guardado no histórico) — por isso nada é automático:
@@ -2134,7 +2234,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         mini.className = 'attach-thumb'; mini.src = url; mini.alt = '';
         chip.appendChild(mini);
       } else {
-        chip.append(document.createTextNode('📄 '));
+        chip.append(document.createTextNode(pdfSenhas.has(f) ? '🔒 ' : '📄 '));
       }
       const nomeBtn = document.createElement('button');
       nomeBtn.type = 'button';
@@ -2152,6 +2252,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       remove.textContent = '✕';
       remove.addEventListener('click', () => {
         pdfOrigem.delete(pendingFiles[i]);
+        pdfSenhas.delete(pendingFiles[i]);
         pendingFiles.splice(i, 1);
         renderAttachPreview();
       });
@@ -2229,17 +2330,14 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     setComposerBusy(true);
     showTyping(filesToSend.length > 0);
     try {
-      const filesBase64 = await Promise.all(filesToSend.map(async f => ({
-        name: f.name,
-        mediaType: f.type || 'application/octet-stream',
-        base64: await fileToBase64(f)
-      })));
+      const filesBase64 = await Promise.all(filesToSend.map(arquivoParaEnvio));
 
       await addDoc(msgsCol, { role: 'user', text, files: fileNames, criadoEm: serverTimestamp(), requestId });
       messageInput.value = "";
       messageInput.style.height = 'auto';
       pendingFiles = [];
       pdfOrigem.clear();
+      pdfSenhas.clear();
       renderAttachPreview();
 
       const result = await assistenteChat({

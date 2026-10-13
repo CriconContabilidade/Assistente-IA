@@ -461,6 +461,69 @@ const pedidoComArquivos = (message, files) => handler({
   ];
   await pedido('olha de novo o rel.pdf');
 
+  console.log('\n10f) PDF com senha: digitada na tela, salva só no servidor e reutilizada');
+  const PDF_PROTEGIDO = require('fs').readFileSync(require('path').join(__dirname, 'fixtures', 'extrato_protegido.pdf'));
+  const protegido = (extra = {}) => ({ ...arquivoPdf('extrato_protegido.pdf', PDF_PROTEGIDO), ...extra });
+  const blocosDaUltima = () => chamadas[0].messages[chamadas[0].messages.length - 1].content;
+  const SENHA_DA_FIXTURE = 'senha123';
+  const senhasSalvas = () => (banco.get('assistenteIA_empresas/mv/segredos/senhasPdf') || { lista: [] }).lista.map((x) => x.senha);
+
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('segue o extrato protegido', [protegido()]);
+  let bl = blocosDaUltima();
+  confere('sem senha nenhuma: NÃO manda o PDF cru (a API recusaria) e avisa a IA', !bl.some((b) => b.type === 'document') && bl.some((b) => b.type === 'text' && /NÃO consegui ler este PDF/.test(b.text) && /digitar a senha/.test(b.text)));
+  confere('nada foi salvo', senhasSalvas().length === 0);
+
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('segue', [protegido({ senha: 'errada' })]);
+  bl = blocosDaUltima();
+  confere('senha errada: mesmo aviso e nada salvo', bl.some((b) => b.type === 'text' && /NÃO consegui ler este PDF/.test(b.text)) && senhasSalvas().length === 0);
+
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('segue', [protegido({ senha: SENHA_DA_FIXTURE })]);
+  bl = blocosDaUltima();
+  const lido = bl.find((b) => b.type === 'text' && b.text.includes('PDF convertido em texto'));
+  confere('senha certa: o PDF é lido como texto', !!lido && lido.text.includes('EXTRATO DE CONTA CORRENTE - BANCO TESTE'), lido && lido.text.slice(0, 200));
+  confere('a senha foi salva pra empresa (subcoleção do servidor)', senhasSalvas().join() === SENHA_DA_FIXTURE, senhasSalvas().join());
+  confere('a senha NUNCA vai pra IA (nem prompt, nem mensagens)', !JSON.stringify(chamadas).includes(SENHA_DA_FIXTURE));
+  confere('a senha não vai pro histórico de mensagens nem de documentos', ![...banco.entries()].some(([k, v]) => !k.includes('/segredos/') && JSON.stringify(v).includes(SENHA_DA_FIXTURE)));
+
+  chamadas.length = 0;
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('outro mês, mesmo banco', [protegido()]);
+  bl = blocosDaUltima();
+  confere('próxima vez, sem digitar: usa a senha salva', bl.some((b) => b.type === 'text' && b.text.includes('PDF convertido em texto') && b.text.includes('BANCO TESTE')));
+
+  chamadas.length = 0;
+  roteiro = [
+    resp([uso('buscar_arquivo', { nome: 'extrato_protegido.pdf' })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('buscar_arquivo reabre o PDF protegido com a senha salva', !res.is_error && Array.isArray(res.content) && res.content.some((b) => b.type === 'text' && b.text.includes('BANCO TESTE')), JSON.stringify(res.content).slice(0, 160));
+      return resp([uso('buscar_arquivo', { nome: 'extrato_protegido.pdf', original: true })], 'tool_use');
+    },
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('original=true num PDF protegido não manda o PDF cru: manda o texto com aviso', Array.isArray(res.content) && !res.content.some((b) => b.type === 'document') && res.content.some((b) => b.type === 'text' && b.text.includes('não pode ser enviado porque tem senha')));
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('reabre o extrato protegido');
+
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('segue', [protegido({ senha: SENHA_DA_FIXTURE, lembrarSenha: false })]);
+  confere('lembrarSenha=false lê o PDF mas não salva a senha', blocosDaUltima().some((b) => b.type === 'text' && b.text.includes('BANCO TESTE')) && senhasSalvas().length === 0);
+
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  let erroSenha = null;
+  try { await pedidoComArquivos('segue', [protegido({ senha: 'x'.repeat(500) })]); } catch (e) { erroSenha = e; }
+  confere('senha absurdamente grande é recusada na entrada', erroSenha && erroSenha.code === 'invalid-argument', erroSenha && erroSenha.message);
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [
