@@ -159,7 +159,11 @@ async function lookupEmpresa(nomeEmpresa) {
 
 const ANTHROPIC_API_KEY = defineSecret("ANTHROPIC_API_KEY");
 
-const MODEL = "claude-sonnet-5";
+// Sonnet 5.5 tem o mesmo preço de entrada/saída do Sonnet 5, mas a leitura de cache (a maior
+// parte dos tokens de cada mensagem) custa metade. Se a conta/API não reconhecer o modelo novo
+// (404), chamarIA() cai pro modelo anterior em vez de derrubar o chat.
+const MODEL = "claude-sonnet-5-5";
+const MODEL_FALLBACK = "claude-sonnet-5";
 
 // Tamanho máximo de cada arquivo anexado, em base64 (~8MB de PDF original).
 const MAX_FILE_BASE64_CHARS = 11 * 1024 * 1024;
@@ -1505,6 +1509,7 @@ exports.assistenteChat = onCall(
     // começo da conversa fica lido a 10% do preço entre uma mensagem e outra. Se a API recusar
     // o TTL, chamarIA() tira e repete com o padrão.
     let ttl1hAtivo = true;
+    let modeloAtual = MODEL;
     const marcadoresCache = [];
     const novoCacheControl = () => {
       const c = { type: "ephemeral", ttl: "1h" };
@@ -1546,7 +1551,7 @@ exports.assistenteChat = onCall(
       // processa os eventos um a um porque não precisa: .finalMessage() entrega a mensagem
       // completa acumulada, no mesmo formato que .create() sempre devolveu.
       const pedir = () => anthropic.messages.stream({
-        model: MODEL,
+        model: modeloAtual,
         // Sonnet 5 aceita até 128K de saída na API síncrona sem precisar de beta header. 16000
         // era baixo demais pra um relatório com muitas linhas (ex.: extrato com ~80
         // lançamentos): o modelo gastava o orçamento inteiro categorizando cada um e nem sobrava
@@ -1562,6 +1567,11 @@ exports.assistenteChat = onCall(
       try {
         return await pedir();
       } catch (err) {
+        if (modeloAtual !== MODEL_FALLBACK && err && err.status === 404 && /model/i.test(String(err.message))) {
+          console.error(`API não reconheceu o modelo ${modeloAtual} — repetindo com ${MODEL_FALLBACK}:`, err.message);
+          modeloAtual = MODEL_FALLBACK;
+          return await chamarIA();
+        }
         if (ttl1hAtivo && Anthropic.BadRequestError && err instanceof Anthropic.BadRequestError && /ttl|cache/i.test(String(err.message))) {
           console.error("API recusou o TTL de 1h do cache — repetindo com o padrão de 5 minutos:", err.message);
           ttl1hAtivo = false;

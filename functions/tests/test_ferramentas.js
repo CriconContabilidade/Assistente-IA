@@ -403,6 +403,20 @@ const pedidoComArquivos = (message, files) => handler({
   const ultimaMsg = chamadas[2].messages[chamadas[2].messages.length - 1];
   confere('na 2ª rodada o último resultado de ferramenta vira ponto de cache', Array.isArray(ultimaMsg.content) && ultimaMsg.content[ultimaMsg.content.length - 1].cache_control);
 
+  console.log('\n10c2) modelo: usa o Sonnet 5.5 e, se a API não o reconhecer (404), volta pro anterior');
+  prepararEmpresa();
+  roteiro = [
+    () => { const e = new Error('404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-sonnet-5-5"}}'); e.status = 404; throw e; },
+    resp([txt('respondi')], 'end_turn'),
+  ];
+  r = await pedido('oi');
+  confere('1ª tentativa no Sonnet 5.5', chamadas[0].model === 'claude-sonnet-5-5', chamadas[0].model);
+  confere('após o 404 repete no modelo anterior e responde', chamadas[1].model === 'claude-sonnet-5' && r.text === 'respondi', chamadas[1] && chamadas[1].model);
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('oi de novo');
+  confere('conversa normal usa o 5.5 direto', chamadas[0].model === 'claude-sonnet-5-5');
+
   console.log('\n10d) PDF de texto vai pra IA como texto; PDF com página de imagem segue como PDF');
   prepararEmpresa();
   roteiro = [resp([txt('ok')], 'end_turn')];
