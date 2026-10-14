@@ -382,7 +382,7 @@ const pedidoComArquivos = (message, files) => handler({
   for (let i = 1; i <= 10; i++) banco.set(`assistenteIA_empresas/mv/documentos/d${String(i).padStart(2, '0')}`, { arquivos: [`rel${i}.pdf`], resumo: 'X'.repeat(5000) + `FIM${i}` });
   roteiro = [resp([txt('ok')], 'end_turn')];
   await pedido('oi');
-  const promptDocs = chamadas[0].system[0].text;
+  const promptDocs = chamadas[0].system[1].text;
   const qtdX = (promptDocs.match(/X/g) || []).length;
   confere('só 6 resumos recentes (1500) + 4 antigos (200) entram, não os 50000 caracteres', qtdX >= 9000 && qtdX <= 10000, String(qtdX));
   confere('todos os 10 relatórios continuam listados pelo nome', [1,2,3,4,5,6,7,8,9,10].every((i) => promptDocs.includes(`rel${i}.pdf`)));
@@ -524,6 +524,37 @@ const pedidoComArquivos = (message, files) => handler({
   try { await pedidoComArquivos('segue', [protegido({ senha: 'x'.repeat(500) })]); } catch (e) { erroSenha = e; }
   confere('senha absurdamente grande é recusada na entrada', erroSenha && erroSenha.code === 'invalid-argument', erroSenha && erroSenha.message);
 
+  console.log('\n10g) prompt em 2 blocos: regras fixas iguais pra toda empresa (cache compartilhado), dados da empresa depois');
+  banco.clear();
+  banco.set('assistenteIA_empresas/mv', { nome: 'MV', notas: ['MV tem observação própria XYZ'], responsavelEmail: '', codigoDominio: '185', cnpj: '21208224000163' });
+  banco.set('assistenteIA_empresas/outra', { nome: 'Outra Empresa Ltda', notas: ['Outra tem regra diferente QWE'], responsavelEmail: '', codigoDominio: '77', cnpj: '43617343000102' });
+  chamadas.length = 0;
+  const pedidoEmpresa = (id) => handler({ auth: { token: { email: 'contabilidadecricon@gmail.com' } }, data: { empresaId: id, message: 'oi', history: [], files: [] } });
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoEmpresa('mv');
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoEmpresa('outra');
+  const [reqA, reqB] = chamadas;
+  confere('bloco fixo é IDÊNTICO entre empresas (é isso que permite o cache compartilhado)', reqA.system[0].text === reqB.system[0].text && reqA.system[0].text.length > 20000, String(reqA.system[0].text.length));
+  confere('as definições das ferramentas (que vêm antes) também são idênticas', JSON.stringify(reqA.tools) === JSON.stringify(reqB.tools));
+  confere('nada da empresa vaza pro bloco fixo', !/MV tem observação|Outra tem regra|Outra Empresa|21208224000163|43617343000102/.test(reqA.system[0].text));
+  confere('dados da empresa estão no 2º bloco', reqA.system[1].text.includes('Empresa atual: MV') && reqA.system[1].text.includes('XYZ') && reqB.system[1].text.includes('Empresa atual: Outra Empresa Ltda') && reqB.system[1].text.includes('QWE'));
+  confere('2º bloco traz o painel do fechamento', /PAINEL DO FECHAMENTO/.test(reqA.system[1].text));
+  confere('os dois blocos têm ponto de cache de 1h', reqA.system.every((b) => b.cache_control && b.cache_control.ttl === '1h'));
+  confere('as regras não mandam mais olhar "acima" pros dados da empresa', !/resumos acima|resumo acima|lista acima|observações acima/.test(reqA.system[0].text));
+
+  // limite da API: no máximo 4 pontos de cache no pedido inteiro (mesmo com histórico, estado e rodada de ferramenta)
+  prepararEmpresa();
+  banco.set('assistenteIA_empresas/mv/estado/atual', { entidades: [{ nome: 'BB RF', cnpj: '43617343000102' }], pendencias: ['teste'] });
+  roteiro = [
+    resp([uso('atualizar_fechamento', { competencia: '08/2026', pendencias: 1 })], 'tool_use'),
+    resp([uso('verificar_cadastro', { entidades: [] })], 'tool_use'),
+    resp([txt('feito')], 'end_turn'),
+  ];
+  await handler({ auth: { token: { email: 'contabilidadecricon@gmail.com' } }, data: { empresaId: 'mv', message: 'segue', history: [{ role: 'user', text: 'antes' }, { role: 'assistant', text: 'resposta' }], files: [] } });
+  const maxPontos = Math.max(...chamadas.map((c) => (JSON.stringify(c).match(/"cache_control"/g) || []).length));
+  confere('nunca passa de 4 pontos de cache (limite da API)', maxPontos <= 4 && maxPontos >= 3, String(maxPontos));
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [
@@ -560,7 +591,7 @@ const pedidoComArquivos = (message, files) => handler({
   r = await pedido('corrige a primeira nota');
   const sistemaDaPrimeiraChamada = chamadas[0].system.map((b) => b.text).join('\n');
   confere('prompt da mensagem seguinte traz o estado salvo (CPF e linhas do último arquivo)', sistemaDaPrimeiraChamada.includes('ESTADO SALVO DO TRABALHO') && sistemaDaPrimeiraChamada.includes('52998224725') && sistemaDaPrimeiraChamada.includes('"numeroDocumento":"1199"'));
-  confere('estado é um bloco separado do prompt fixo, com cache próprio (1h)', chamadas[0].system.length === 2 && chamadas[0].system[1].cache_control && chamadas[0].system[1].cache_control.ttl === '1h');
+  confere('estado vai junto dos dados da empresa (2º bloco, cache 1h), fora do bloco fixo', chamadas[0].system.length === 2 && chamadas[0].system[1].cache_control && chamadas[0].system[1].cache_control.ttl === '1h' && chamadas[0].system[1].text.includes('ESTADO SALVO DO TRABALHO') && !chamadas[0].system[0].text.includes('ESTADO SALVO DO TRABALHO NESTA EMPRESA'));
   const baixa = r.arquivosGerados.find((a) => a.nome === 'baixa_ser.txt');
   confere('baixa de nota que já existe no Contas a Receber (fora do último ServicoPrest) NÃO gera aviso falso', baixa && baixa.avisos.length === 0, JSON.stringify(baixa && baixa.avisos));
 
