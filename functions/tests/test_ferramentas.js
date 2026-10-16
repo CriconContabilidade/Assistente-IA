@@ -146,6 +146,11 @@ const pedido = (message, history = []) => handler({
   auth: { token: { email: 'contabilidadecricon@gmail.com' } },
   data: { empresaId: 'mv', message, history, files: [] },
 });
+const ctxAtual = (chamada) => {
+  const ms = chamada.messages;
+  const u = ms[ms.length - 1].content;
+  return Array.isArray(u) ? u[0].text : '';
+};
 const mensagensSalvas = () => [...banco.entries()].filter(([k]) => k.includes('/mensagens/')).map(([, v]) => v);
 const LANC = { data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, complemento: 'Tarifa bancaria', codigoEmp: '185' };
 
@@ -543,7 +548,7 @@ const pedidoComArquivos = (message, files) => handler({
   confere('as definições das ferramentas (que vêm antes) também são idênticas', JSON.stringify(reqA.tools) === JSON.stringify(reqB.tools));
   confere('nada da empresa vaza pro bloco fixo', !/MV tem observação|Outra tem regra|Outra Empresa|21208224000163|43617343000102/.test(reqA.system[0].text));
   confere('dados da empresa estão no 2º bloco', reqA.system[1].text.includes('Empresa atual: MV') && reqA.system[1].text.includes('XYZ') && reqB.system[1].text.includes('Empresa atual: Outra Empresa Ltda') && reqB.system[1].text.includes('QWE'));
-  confere('2º bloco traz o painel do fechamento', /PAINEL DO FECHAMENTO/.test(reqA.system[1].text));
+  confere('painel do fechamento NÃO fica no prompt de sistema (vai na mensagem atual)', !/PAINEL DO FECHAMENTO|Competência em andamento/.test(reqA.system[1].text) && /PAINEL DO FECHAMENTO/.test(ctxAtual(reqA)));
   confere('os dois blocos têm ponto de cache de 1h', reqA.system.every((b) => b.cache_control && b.cache_control.ttl === '1h'));
   confere('as regras não mandam mais olhar "acima" pros dados da empresa', !/resumos acima|resumo acima|lista acima|observações acima/.test(reqA.system[0].text));
 
@@ -580,6 +585,127 @@ const pedidoComArquivos = (message, files) => handler({
   const info = docsSalvos[0] && docsSalvos[0].arquivosInfo && docsSalvos[0].arquivosInfo[0];
   confere('documento guarda nome, tamanho e hash SHA-256 do arquivo', info && info.nome === 'rel.pdf' && info.tamanho === PDF_TEXTO.length && info.hash === require('crypto').createHash('sha256').update(PDF_TEXTO).digest('hex'), JSON.stringify(info));
 
+  console.log('\n10i) cache: system estável, contexto na mensagem atual, anexo já cacheado na rodada 1, custo no log');
+  prepararEmpresa();
+  banco.set('assistenteIA_empresas/mv/estado/atual', { pendencias: ['primeira'] });
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('oi');
+  const sistemaAntes = JSON.stringify(chamadas[0].system);
+  banco.set('assistenteIA_empresas/mv/estado/atual', { pendencias: ['mudou o estado', 'outra'] });
+  banco.set('assistenteIA_empresas/mv/fechamentos/2026-09', { competencia: '09/2026', relatorios: ['extrato', 'diario'] });
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('oi');
+  confere('mudar estado/fechamento NÃO muda o prompt de sistema (cache do histórico preservado)', JSON.stringify(chamadas[1].system) === sistemaAntes);
+  confere('o estado novo chega na mensagem atual', ctxAtual(chamadas[1]).includes('mudou o estado') && ctxAtual(chamadas[1]).includes('09/2026'));
+  confere('a fala do usuário vem DEPOIS do contexto', chamadas[1].messages[chamadas[1].messages.length - 1].content.slice(-1)[0].text === 'oi');
+
+  prepararEmpresa();
+  banco.set('assistenteIA_empresas/mv/estado/atual', { pendencias: ['x'] });
+  roteiro = [
+    resp([uso('atualizar_fechamento', { competencia: '08/2026', pendencias: 2 })], 'tool_use'),
+    resp([uso('salvar_observacao', { texto: "regra de teste do contexto" })], 'tool_use'),
+    resp([txt('feito')], 'end_turn'),
+  ];
+  await pedidoComArquivos('segue o extrato', [arquivoPdf('extrato.pdf', PDF_TEXTO)]);
+  const ultimoBloco = (c, i) => { const m = c.messages[i === undefined ? c.messages.length - 1 : i]; return Array.isArray(m.content) ? m.content[m.content.length - 1] : null; };
+  const primeiraUser = (c) => c.messages.find((m) => m.role === 'user');
+  const cc1 = ultimoBloco(chamadas[0]).cache_control;
+  confere('com anexo, a mensagem atual já entra no cache na rodada 1 (TTL padrão de 5 min)', cc1 && cc1.type === 'ephemeral' && cc1.ttl === undefined, JSON.stringify(cc1));
+  const ultimoDaMsg1 = (c) => { const m = primeiraUser(c); return m.content[m.content.length - 1]; };
+  confere('na rodada 2 o marcador sai da mensagem e vai pro último tool_result', !ultimoDaMsg1(chamadas[1]).cache_control && !!ultimoBloco(chamadas[1]).cache_control);
+  confere('o contexto da rodada 1 NÃO muda nas rodadas seguintes (prefixo preservado)', [0, 1, 2].every((i) => primeiraUser(chamadas[i]).content[0].text === primeiraUser(chamadas[0]).content[0].text));
+  confere('nunca passa de 4 pontos de cache em nenhuma rodada', chamadas.every((c) => (JSON.stringify(c).match(/"cache_control"/g) || []).length <= 4), chamadas.map((c) => (JSON.stringify(c).match(/"cache_control"/g) || []).length).join(','));
+  confere('pontos de 1h sempre antes do de 5 min (exigência da API)', chamadas.every((c) => c.system.every((b) => b.cache_control.ttl === '1h')));
+
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('oi curto');
+  confere('mensagem pequena sem anexo não paga gravação de cache na rodada 1', !ultimoBloco(chamadas[0]).cache_control);
+
+  const logsCusto = [];
+  const logOriginal = console.log;
+  console.log = (...a) => { logsCusto.push(a.join(' ')); };
+  prepararEmpresa();
+  roteiro = [{ content: [txt('ok')], stop_reason: 'end_turn', usage: { input_tokens: 1e6, output_tokens: 1e5, cache_read_input_tokens: 1e6, cache_creation_input_tokens: 1e6, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 1e6 } } }];
+  await pedido('custo');
+  console.log = logOriginal;
+  const linhaTotal = logsCusto.find((l) => l.includes('total da mensagem')) || '';
+  confere('log traz o custo estimado em US$ (Sonnet 5.5: 2 + 0,10 + 4 + 1 = 7,10)', linhaTotal.includes('custo estimado US$ 7.1000'), linhaTotal);
+
+  console.log('\n10j) PDF: capa/aviso com logotipo não derrubam a conversão; escaneado continua indo como PDF; cabeçalho repetido sai');
+  const imagem = 'q 100 0 0 100 50 500 cm BI /W 1 /H 1 /CS /G /BPC 8 ID \x80 EI Q\n';
+  const paginaTexto = (n) => txtPdf(50, 700, `Lancamento ${n} - TARIFA BANCARIA COBRADA NO PERIODO`) + txtPdf(50, 680, `Lancamento ${n} - CREDITO DE LIQUIDACAO DE COBRANCA`) + txtPdf(50, 660, `Documento numero ${n} conferido contra o extrato do banco`);
+  const relatorio = criarPdf([
+    txtPdf(50, 700, 'CAPA DO EXTRATO') + imagem,
+    ...[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(paginaTexto),
+    txtPdf(50, 700, 'AVISO LEGAL') + imagem,
+    txtPdf(50, 700, 'OUVIDORIA') + imagem,
+  ]);
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('extrato com capa', [arquivoPdf('extrato_capa.pdf', relatorio)]);
+  blocosEnviados = chamadas[0].messages[chamadas[0].messages.length - 1].content;
+  const blocoRel = blocosEnviados.find((b) => b.type === 'text' && b.text.includes('PDF convertido em texto'));
+  confere('14 páginas com 3 pobres (capa + 2 avisos) = 21%: vira texto, não PDF', !!blocoRel && !blocosEnviados.some((b) => b.type === 'document'));
+  confere('o texto das páginas boas veio inteiro', blocoRel && blocoRel.text.includes('Documento numero 7') && blocoRel.text.includes('Lancamento 12'));
+  confere('as páginas pobres ganham nota pra IA saber que pode haver conteúdo visual', blocoRel && /\[Página 1: pouco texto e contém imagem/.test(blocoRel.text) && /\[Página 14: pouco texto/.test(blocoRel.text));
+
+  const maioriaEscaneada = criarPdf([txtPdf(50, 700, 'CAPA') + imagem, paginaTexto(2), txtPdf(50, 700, 'FIM') + imagem]);
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('3 páginas, 2 de imagem', [arquivoPdf('misto.pdf', maioriaEscaneada)]);
+  blocosEnviados = chamadas[0].messages[chamadas[0].messages.length - 1].content;
+  confere('mais de 30% das páginas pobres com imagem: segue como PDF', blocosEnviados.some((b) => b.type === 'document'));
+
+  const doisPaginas = criarPdf([paginaTexto(1), txtPdf(50, 700, 'COMPROVANTE') + imagem]);
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('comprovante de 2 páginas', [arquivoPdf('curto.pdf', doisPaginas)]);
+  blocosEnviados = chamadas[0].messages[chamadas[0].messages.length - 1].content;
+  confere('PDF de 2 páginas com uma pobre + imagem segue como PDF (comprovante escaneado)', blocosEnviados.some((b) => b.type === 'document'));
+
+  const cab = (n) => txtPdf(50, 760, 'EMPRESA TESTE LTDA') + txtPdf(50, 745, 'CNPJ 12.345.678/0001-90') + txtPdf(50, 730, `Folha ${String(n).padStart(4, '0')}`) + txtPdf(50, 715, 'Data Conta Debito Conta Credito Valor');
+  const diario = criarPdf([1, 2, 3, 4, 5, 6].map((n) => cab(n) + txtPdf(50, 690, `Lancamento unico numero ${n} com historico bem comprido pra passar do minimo`) + txtPdf(50, 670, `Segundo lancamento da pagina ${n} no valor de ${n}00,00 reais certinhos`)));
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('diário', [arquivoPdf('diario.pdf', diario)]);
+  blocosEnviados = chamadas[0].messages[chamadas[0].messages.length - 1].content;
+  const blocoDiario = blocosEnviados.find((b) => b.type === 'text' && b.text.includes('PDF convertido em texto'));
+  const ocorr = (txt, trecho) => txt.split(trecho).length - 1;
+  confere('cabeçalho idêntico repetido em toda página aparece só uma vez', blocoDiario && ocorr(blocoDiario.text, 'EMPRESA TESTE LTDA') === 1 && ocorr(blocoDiario.text, 'CNPJ 12.345.678/0001-90') === 1 && ocorr(blocoDiario.text, 'Conta Debito') === 1);
+  confere('linha que muda por página (Folha) e TODOS os dados ficam', blocoDiario && [1, 2, 3, 4, 5, 6].every((n) => blocoDiario.text.includes(`Folha 000${n}`) && blocoDiario.text.includes(`Lancamento unico numero ${n}`) && blocoDiario.text.includes(`pagina ${n} no valor de ${n}00,00`)));
+  confere('avisa a IA que o cabeçalho foi omitido nas páginas seguintes', blocoDiario && blocoDiario.text.includes('foi omitido, vale o da primeira página'));
+
+  console.log('\n10k) planilha: sem linhas vazias nem colunas vazias no fim; print colado não vira documento');
+  const PNG = { name: 'image.png', mediaType: 'image/png', base64: Buffer.from('png-falso').toString('base64') };
+  const docsNoBanco = () => [...banco.keys()].filter((k) => /\/documentos\/[^/]+$/.test(k)).length;
+  prepararEmpresa();
+  roteiro = [resp([txt('Vi o erro no print.')], 'end_turn')];
+  await pedidoComArquivos('olha esse erro', [PNG]);
+  confere('só print colado (image.png): não cria registro em documentos', docsNoBanco() === 0);
+  prepararEmpresa();
+  roteiro = [resp([txt('Vi.')], 'end_turn')];
+  await pedidoComArquivos('foto do boleto', [{ ...PNG, name: 'IMG_2031.jpg', mediaType: 'image/jpeg' }]);
+  confere('foto com nome próprio (comprovante) continua sendo guardada', docsNoBanco() === 1);
+  prepararEmpresa();
+  roteiro = [resp([txt('Preciso da competência.')], 'end_turn')];
+  await pedidoComArquivos('segue', [arquivoPdf('extrato.pdf', PDF_TEXTO), PNG]);
+  const docMisto = [...banco.entries()].find(([k]) => /\/documentos\/[^/]+$/.test(k));
+  confere('PDF + print: guarda só o PDF', docMisto && docMisto[1].arquivos.length === 1 && docMisto[1].arquivos[0] === 'extrato.pdf' && docMisto[1].arquivosInfo.length === 1);
+  confere('resposta curta (<300) marca o resumo como parcial', docMisto && docMisto[1].resumoParcial === true);
+
+  prepararEmpresa();
+  banco.set('assistenteIA_empresas/mv/documentos/a01', { arquivos: ['curto.pdf'], resumo: 'ok', resumoParcial: true });
+  for (let i = 1; i <= 8; i++) banco.set(`assistenteIA_empresas/mv/documentos/d${String(i).padStart(2, '0')}`, { arquivos: [`rel${i}.pdf`], resumo: 'R'.repeat(3000) + `FIM${i}` });
+  for (let i = 1; i <= 5; i++) banco.set(`assistenteIA_empresas/mv/documentos/e${String(i).padStart(2, '0')}`, { arquivos: ['image.png'], resumo: 'I'.repeat(3000) + `PRINT${i}` });
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('oi');
+  const promptIdx = chamadas[0].system[1].text;
+  const qtdR = (promptIdx.match(/R/g) || []).length;
+  confere('prints antigos não roubam as 6 vagas completas: os relatórios mantêm 1500 chars', qtdR >= 6 * 1500 - 200, String(qtdR));
+  confere('prints antigos ficam só com o resumo curto', (promptIdx.match(/I/g) || []).length < 5 * 400);
+  confere('resumo parcial vem com aviso pra reabrir o arquivo', promptIdx.includes('curto.pdf (resumo curto'));
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [
@@ -614,10 +740,10 @@ const pedidoComArquivos = (message, files) => handler({
     (params) => resp([txt('ok')], 'end_turn'),
   ];
   r = await pedido('corrige a primeira nota');
-  const sistemaDaPrimeiraChamada = chamadas[0].system.map((b) => b.text).join('\n');
+  const sistemaDaPrimeiraChamada = chamadas[0].system.map((b) => b.text).join('\n') + '\n' + ctxAtual(chamadas[0]);
   confere('prompt da mensagem seguinte traz o estado salvo (CPF e linhas do último arquivo)', sistemaDaPrimeiraChamada.includes('ESTADO SALVO DO TRABALHO') && sistemaDaPrimeiraChamada.includes('52998224725') && sistemaDaPrimeiraChamada.includes('cnpj | numeroDocumento |') && sistemaDaPrimeiraChamada.includes('52998224725 | 1199 |'));
-  confere('linhas do estado vão em tabela (sem repetir as chaves em cada linha)', !chamadas[0].system[1].text.includes('"numeroDocumento"'));
-  confere('estado vai junto dos dados da empresa (2º bloco, cache 1h), fora do bloco fixo', chamadas[0].system.length === 2 && chamadas[0].system[1].cache_control && chamadas[0].system[1].cache_control.ttl === '1h' && chamadas[0].system[1].text.includes('ESTADO SALVO DO TRABALHO') && !chamadas[0].system[0].text.includes('ESTADO SALVO DO TRABALHO NESTA EMPRESA'));
+  confere('linhas do estado vão em tabela (sem repetir as chaves em cada linha)', !ctxAtual(chamadas[0]).includes('"numeroDocumento"'));
+  confere('estado vai no INÍCIO da mensagem atual, fora do prompt de sistema (não invalida o cache do histórico)', chamadas[0].system.length === 2 && !chamadas[0].system.some((b) => b.text.includes('ESTADO SALVO DO TRABALHO NESTA EMPRESA')) && ctxAtual(chamadas[0]).includes('ESTADO SALVO DO TRABALHO NESTA EMPRESA') && ctxAtual(chamadas[0]).startsWith('[CONTEXTO ATUAL DO SISTEMA'));
   const baixa = r.arquivosGerados.find((a) => a.nome === 'baixa_ser.txt');
   confere('baixa de nota que já existe no Contas a Receber (fora do último ServicoPrest) NÃO gera aviso falso', baixa && baixa.avisos.length === 0, JSON.stringify(baixa && baixa.avisos));
 
@@ -657,7 +783,7 @@ const pedidoComArquivos = (message, files) => handler({
   chamadas.length = 0;
   roteiro = [resp([txt('ok')], 'end_turn')];
   await pedido('próximo');
-  confere('fila de pendências aparece no prompt seguinte', chamadas[0].system.map((b) => b.text).join('\n').includes('1. 14/09 TRANSFERENCIA R$30.000'));
+  confere('fila de pendências aparece no prompt seguinte', ctxAtual(chamadas[0]).includes('1. 14/09 TRANSFERENCIA R$30.000'));
 
   console.log(falhas === 0 ? '\nTUDO OK' : `\n${falhas} FALHA(S)`);
   process.exit(falhas === 0 ? 0 : 1);
