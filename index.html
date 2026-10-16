@@ -533,6 +533,10 @@
   .pag-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
   .pag-card { border: 1px solid var(--panel-border); border-radius: 10px; padding: 8px; background: rgba(255,255,255,0.03); display: flex; flex-direction: column; gap: 6px; }
   .pag-card.fora { opacity: 0.45; border-style: dashed; }
+  .pag-card.suspeita { border-color: #e0a800; box-shadow: 0 0 0 1px #e0a800 inset; }
+  .pag-etiqueta { font-size: 0.7rem; font-weight: 600; color: #b58900; background: rgba(224,168,0,0.15); border-radius: 6px; padding: 2px 6px; align-self: flex-start; }
+  .pag-toolbar button.pag-btn-suspeitas { border-color: #e0a800; color: #b58900; }
+  .attach-chip .attach-aviso { color: #b58900; font-size: 0.74rem; font-weight: 600; text-decoration: underline dotted; text-underline-offset: 3px; }
   .pag-topo { display: flex; align-items: center; justify-content: space-between; font-size: 0.78rem; }
   .pag-topo label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
   .pag-topo input { width: auto; }
@@ -1944,6 +1948,35 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   // PDF reduzido (só com as páginas marcadas) -> { original, marcadas }. Guarda o original pra dar
   // pra reabrir o seletor e desfazer a seleção; limpa quando a mensagem é enviada.
   const pdfOrigem = new Map();
+  // Páginas com pouco texto (e se têm imagem), achadas ao anexar: File original -> [{ n, imagem }].
+  // Mesmo critério do servidor: menos de 120 caracteres de texto. Só avisa; quem decide é a pessoa.
+  const pdfSuspeitas = new Map();
+  const PAG_POBRE_CHARS = 120;
+  async function suspeitasDoDoc(doc) {
+    const OPS = pdfjsLib.OPS || {};
+    const opsImagem = new Set([OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject].filter((x) => x !== undefined));
+    const lista = [];
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      const tc = await page.getTextContent();
+      const chars = tc.items.reduce((t, i) => t + String(i.str || '').trim().length, 0);
+      if (chars < PAG_POBRE_CHARS) {
+        let imagem = false;
+        try { imagem = (await page.getOperatorList()).fnArray.some((fn) => opsImagem.has(fn)); } catch (err) { /* sem a checagem de imagem, fica só "pouco texto" */ }
+        lista.push({ n, imagem });
+      }
+      if (page.cleanup) page.cleanup();
+    }
+    return lista;
+  }
+  function formatarPaginas(nums) {
+    const faixas = [];
+    nums.forEach((n) => {
+      const ult = faixas[faixas.length - 1];
+      if (ult && n === ult[1] + 1) ult[1] = n; else faixas.push([n, n]);
+    });
+    return faixas.map(([a, b]) => (a === b ? String(a) : b === a + 1 ? `${a}, ${b}` : `${a}–${b}`)).join(', ');
+  }
 
   // PDFs com senha: File -> { senha, lembrar }. A senha só vive aqui até o envio, vai ao servidor
   // por HTTPS junto com o arquivo e nunca entra no chat.
@@ -2077,11 +2110,32 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     }
     renderAttachPreview();
   }
+  async function inspecionarPdf(f) {
+    if (!ehPdf(f) || typeof pdfjsLib === 'undefined') return;
+    let doc = null;
+    try {
+      const s = pdfSenhas.get(f);
+      doc = await pdfjsLib.getDocument({ data: new Uint8Array(await f.arrayBuffer()), ...(s ? { password: s.senha } : {}) }).promise;
+      if (!doc.numPages || doc.numPages < 2) return;
+      const lista = await suspeitasDoDoc(doc);
+      if (lista.length) pdfSuspeitas.set(f, lista);
+    } catch (err) {
+      console.warn('Não consegui inspecionar as páginas do PDF:', err);
+    } finally {
+      if (doc && doc.destroy) doc.destroy();
+    }
+  }
   async function anexarArquivos(lista) {
     pendingFiles.push(...lista);
     renderAttachPreview();
     await tratarPdfsProtegidos(lista);
     await tratarDuplicados(lista.filter((f) => pendingFiles.includes(f)));
+    // avisa de páginas com imagem/pouco texto; com um único PDF assim, já abre pra revisão
+    const novos = lista.filter((f) => pendingFiles.includes(f));
+    await Promise.all(novos.map(inspecionarPdf));
+    renderAttachPreview();
+    const comAviso = novos.filter((f) => pdfSuspeitas.has(f) && pendingFiles.includes(f));
+    if (comAviso.length === 1) abrirPreviewAnexo(comAviso[0], pendingFiles.indexOf(comAviso[0]));
   }
   async function arquivoParaEnvio(f) {
     const s = pdfSenhas.get(f);
@@ -2112,6 +2166,16 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const btnNenhuma = document.createElement('button');
     btnNenhuma.type = 'button'; btnNenhuma.textContent = 'Desmarcar todas';
     toolbar.append(contador, btnTodas, btnNenhuma);
+    let suspeitas = pdfSuspeitas.get(origem.original);
+    if (!suspeitas && n >= 2) {
+      try { suspeitas = await suspeitasDoDoc(doc); if (suspeitas.length) pdfSuspeitas.set(origem.original, suspeitas); } catch (err) { suspeitas = []; }
+    }
+    suspeitas = suspeitas || [];
+    const btnSuspeitas = document.createElement('button');
+    btnSuspeitas.type = 'button';
+    btnSuspeitas.className = 'pag-btn-suspeitas';
+    btnSuspeitas.textContent = `Desmarcar págs. com imagem/pouco texto (pág. ${formatarPaginas(suspeitas.map((x) => x.n))})`;
+    if (suspeitas.length) toolbar.appendChild(btnSuspeitas);
     const grade = document.createElement('div');
     grade.className = 'pag-grid';
     const aviso = document.createElement('div');
@@ -2162,6 +2226,8 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       const card = document.createElement('div');
       card.className = 'pag-card';
       card.dataset.pagina = String(k + 1);
+      const suspeita = suspeitas.find((x) => x.n === k + 1);
+      if (suspeita) card.classList.add('suspeita');
       const topo = document.createElement('div');
       topo.className = 'pag-topo';
       const rotulo = document.createElement('label');
@@ -2187,12 +2253,27 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       topo.append(rotulo, zoom);
       const cv = document.createElement('canvas');
       cv.className = 'pag-thumb';
-      card.append(topo, cv);
+      if (suspeita) {
+        const etiqueta = document.createElement('div');
+        etiqueta.className = 'pag-etiqueta';
+        etiqueta.textContent = suspeita.imagem ? '⚠️ Imagem / pouco texto' : '⚠️ Pouco texto';
+        card.append(topo, etiqueta, cv);
+      } else {
+        card.append(topo, cv);
+      }
       grade.appendChild(card);
       cards.push(card);
       if (observador) observador.observe(card); else renderizar(k + 1, cv, 300);
     }
     btnTodas.addEventListener('click', () => { marcadas.fill(true); grade.querySelectorAll('input').forEach((c) => { c.checked = true; }); atualizar(); });
+    btnSuspeitas.addEventListener('click', () => {
+      suspeitas.forEach((x) => {
+        marcadas[x.n - 1] = false;
+        const c = cards[x.n - 1].querySelector('input');
+        if (c) c.checked = false;
+      });
+      atualizar();
+    });
     btnNenhuma.addEventListener('click', () => { marcadas.fill(false); grade.querySelectorAll('input').forEach((c) => { c.checked = false; }); atualizar(); });
     aplicarBtn.hidden = false;
     atualizar();
@@ -2322,11 +2403,22 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         : f.name;
       nomeBtn.addEventListener('click', () => abrirPreviewAnexo(f, i));
       chip.append(nomeBtn, document.createTextNode(' '));
+      const suspOrig = pdfSuspeitas.get(reduzido ? reduzido.original : f);
+      const suspAtivas = suspOrig ? suspOrig.filter((x) => !reduzido || reduzido.marcadas[x.n - 1]) : [];
+      if (suspAtivas.length) {
+        const av = document.createElement('button');
+        av.type = 'button';
+        av.className = 'attach-aviso';
+        av.textContent = `⚠️ Pág. ${formatarPaginas(suspAtivas.map((x) => x.n))} com imagem/pouco texto (clique p/ revisar)`;
+        av.addEventListener('click', () => abrirPreviewAnexo(f, i));
+        chip.append(av, document.createTextNode(' '));
+      }
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.dataset.i = String(i);
       remove.textContent = '✕';
       remove.addEventListener('click', () => {
+        pdfSuspeitas.delete((pdfOrigem.get(pendingFiles[i]) || {}).original || pendingFiles[i]);
         pdfOrigem.delete(pendingFiles[i]);
         pdfSenhas.delete(pendingFiles[i]);
         pendingFiles.splice(i, 1);
@@ -2415,6 +2507,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       pdfOrigem.clear();
       pdfSenhas.clear();
       pdfProtegidos.clear();
+      pdfSuspeitas.clear();
       renderAttachPreview();
 
       const result = await assistenteChat({
