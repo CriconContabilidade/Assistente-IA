@@ -868,6 +868,18 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="dupOverlay">
+  <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="dupTitulo">
+    <h3 id="dupTitulo">Arquivo já enviado</h3>
+    <div id="dupInfo" style="font-size:0.88rem;font-weight:600;margin-bottom:10px;word-break:break-word;"></div>
+    <div class="modal-dica">A IA já tem o resumo desse arquivo no histórico desta empresa e pode reabrir o original quando precisar. Enviar de novo gasta tokens à toa. Se for uma versão corrigida (um relatório emitido de novo, por exemplo), o conteúdo muda e este aviso não aparece.</div>
+    <div class="modal-actions">
+      <button class="modal-btn-confirm" id="dupNao" type="button">Não anexar</button>
+      <button class="modal-btn-cancel" id="dupSim" type="button">Anexar mesmo assim</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="senhaOverlay">
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="senhaTitulo">
     <h3 id="senhaTitulo">PDF protegido por senha</h3>
@@ -974,7 +986,7 @@
   import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence, getIdTokenResult } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import {
     getFirestore, collection, doc, addDoc, setDoc, deleteDoc, updateDoc,
-    onSnapshot, query, orderBy, where, serverTimestamp, arrayUnion
+    onSnapshot, query, orderBy, where, serverTimestamp, arrayUnion, getDocs
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 
@@ -1936,6 +1948,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   // PDFs com senha: File -> { senha, lembrar }. A senha só vive aqui até o envio, vai ao servidor
   // por HTTPS junto com o arquivo e nunca entra no chat.
   const pdfSenhas = new Map();
+  const pdfProtegidos = new Set();
   const ehPdf = (f) => f && (f.type === 'application/pdf' || /\.pdf$/i.test(String(f.name || '')));
   async function abrirPdfParaTestar(f, senha) {
     const bytes = new Uint8Array(await f.arrayBuffer());
@@ -1987,6 +2000,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     for (const f of arquivos) {
       if (!ehPdf(f) || typeof pdfjsLib === 'undefined') continue;
       if (!(await pdfEstaProtegido(f))) continue;
+      pdfProtegidos.add(f);
       let erro = '';
       for (;;) {
         const r = await pedirSenhaPdf(f, erro);
@@ -2002,10 +2016,72 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     }
     renderAttachPreview();
   }
+  // Avisa quando o arquivo é IDÊNTICO (mesmo conteúdo, pelo hash) a um já enviado nesta empresa:
+  // a IA já tem o resumo no histórico e o original guardado, e reenviar paga a entrada de novo.
+  // Versão corrigida muda o conteúdo, então não dispara. PDFs com senha ficam de fora: a 1ª
+  // tentativa pode ter falhado justamente por falta da senha.
+  async function hashDoArquivo(f) {
+    const digest = await crypto.subtle.digest('SHA-256', await f.arrayBuffer());
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  }
+  async function enviosAnteriores() {
+    if (!activeEmpresaId) return [];
+    const snap = await getDocs(query(collection(db, "assistenteIA_empresas", activeEmpresaId, "documentos"), orderBy("criadoEm", "desc")));
+    const lista = [];
+    snap.forEach((d) => {
+      const x = d.data();
+      const data = x.criadoEm && x.criadoEm.toDate ? x.criadoEm.toDate().toLocaleDateString('pt-BR') : '';
+      (Array.isArray(x.arquivosInfo) ? x.arquivosInfo : []).forEach((a) => { if (a && a.hash) lista.push({ nome: a.nome, hash: a.hash, data }); });
+    });
+    return lista;
+  }
+  function confirmarReenvio(f, anterior) {
+    const overlay = document.getElementById('dupOverlay');
+    const nao = document.getElementById('dupNao');
+    const sim = document.getElementById('dupSim');
+    document.getElementById('dupInfo').textContent = `${f.name} — já enviado${anterior.data ? ` em ${anterior.data}` : ''}${anterior.nome && anterior.nome !== f.name ? ` (como "${anterior.nome}")` : ''}`;
+    return new Promise((resolve) => {
+      function fechar(r) {
+        overlay.classList.remove('show');
+        overlay.removeEventListener('keydown', onKey);
+        nao.removeEventListener('click', onNao);
+        sim.removeEventListener('click', onSim);
+        resolve(r);
+      }
+      function onNao() { fechar(false); }
+      function onSim() { fechar(true); }
+      function onKey(e) { if (e.key === 'Escape') { e.preventDefault(); fechar(false); } }
+      overlay.addEventListener('keydown', onKey);
+      nao.addEventListener('click', onNao);
+      sim.addEventListener('click', onSim);
+      overlay.classList.add('show');
+      setTimeout(() => nao.focus(), 0);
+    });
+  }
+  async function tratarDuplicados(arquivos) {
+    let anteriores;
+    try { anteriores = await enviosAnteriores(); } catch (err) { console.warn('Não consegui checar reenvio de arquivo:', err); return; }
+    if (!anteriores.length) return;
+    for (const f of arquivos) {
+      if (pdfProtegidos.has(f)) continue;
+      let h;
+      try { h = await hashDoArquivo(f); } catch (err) { continue; }
+      const achou = anteriores.find((a) => a.hash === h);
+      if (!achou) continue;
+      if (!(await confirmarReenvio(f, achou))) {
+        const i = pendingFiles.indexOf(f);
+        if (i >= 0) pendingFiles.splice(i, 1);
+        pdfOrigem.delete(f);
+        pdfSenhas.delete(f);
+      }
+    }
+    renderAttachPreview();
+  }
   async function anexarArquivos(lista) {
     pendingFiles.push(...lista);
     renderAttachPreview();
     await tratarPdfsProtegidos(lista);
+    await tratarDuplicados(lista.filter((f) => pendingFiles.includes(f)));
   }
   async function arquivoParaEnvio(f) {
     const s = pdfSenhas.get(f);
@@ -2338,6 +2414,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       pendingFiles = [];
       pdfOrigem.clear();
       pdfSenhas.clear();
+      pdfProtegidos.clear();
       renderAttachPreview();
 
       const result = await assistenteChat({

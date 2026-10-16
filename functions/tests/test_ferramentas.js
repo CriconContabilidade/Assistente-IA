@@ -559,6 +559,27 @@ const pedidoComArquivos = (message, files) => handler({
   const maxPontos = Math.max(...chamadas.map((c) => (JSON.stringify(c).match(/"cache_control"/g) || []).length));
   confere('nunca passa de 4 pontos de cache (limite da API)', maxPontos <= 4 && maxPontos >= 3, String(maxPontos));
 
+  console.log('\n10h) economias: código da empresa preenchido pelo servidor, hash dos arquivos guardados, aviso de Diário com máscara');
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('gerar_arquivo', { tipo: 'lanctos', linhas: [{ data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, complemento: 'Tarifa' }, { data: '11/08/2026', debito: '384', credito: '7', valor: 10, complemento: 'Outra', codigoEmp: '999' }] })], 'tool_use'),
+    resp([txt('ok')], 'end_turn'),
+  ];
+  r = await pedido('gera sem codigoEmp');
+  const lancsTxt = Buffer.from(r.arquivosGerados[0].base64, 'base64').toString('latin1').split('\r\n').filter(Boolean);
+  confere('linha sem codigoEmp recebe o código da empresa (185)', lancsTxt[0].split(';')[7] === '185', lancsTxt[0]);
+  confere('codigoEmp informado pela IA não é sobrescrito', lancsTxt[1].split(';')[7] === '999', lancsTxt[1]);
+  const textoFixo = chamadas[0].system[0].text;
+  confere('prompt diz que codigoEmp e campos vazios podem ser omitidos', textoFixo.includes('pode ser omitido') && textoFixo.includes('OMITIR'));
+  confere('prompt manda avisar na hora se o Diário vier com máscara em vez de código', textoFixo.includes('ANTES de qualquer outra coisa confira se as contas aparecem pelo CÓDIGO NUMÉRICO') && textoFixo.includes('1.1.2.01.000'));
+
+  prepararEmpresa();
+  roteiro = [resp([txt('guardei')], 'end_turn')];
+  await pedidoComArquivos('guarda esse extrato', [arquivoPdf('rel.pdf', PDF_TEXTO)]);
+  const docsSalvos = [...banco.entries()].filter(([k]) => /\/documentos\/[^/]+$/.test(k)).map(([, v]) => v);
+  const info = docsSalvos[0] && docsSalvos[0].arquivosInfo && docsSalvos[0].arquivosInfo[0];
+  confere('documento guarda nome, tamanho e hash SHA-256 do arquivo', info && info.nome === 'rel.pdf' && info.tamanho === PDF_TEXTO.length && info.hash === require('crypto').createHash('sha256').update(PDF_TEXTO).digest('hex'), JSON.stringify(info));
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [
@@ -594,7 +615,8 @@ const pedidoComArquivos = (message, files) => handler({
   ];
   r = await pedido('corrige a primeira nota');
   const sistemaDaPrimeiraChamada = chamadas[0].system.map((b) => b.text).join('\n');
-  confere('prompt da mensagem seguinte traz o estado salvo (CPF e linhas do último arquivo)', sistemaDaPrimeiraChamada.includes('ESTADO SALVO DO TRABALHO') && sistemaDaPrimeiraChamada.includes('52998224725') && sistemaDaPrimeiraChamada.includes('"numeroDocumento":"1199"'));
+  confere('prompt da mensagem seguinte traz o estado salvo (CPF e linhas do último arquivo)', sistemaDaPrimeiraChamada.includes('ESTADO SALVO DO TRABALHO') && sistemaDaPrimeiraChamada.includes('52998224725') && sistemaDaPrimeiraChamada.includes('cnpj | numeroDocumento |') && sistemaDaPrimeiraChamada.includes('52998224725 | 1199 |'));
+  confere('linhas do estado vão em tabela (sem repetir as chaves em cada linha)', !chamadas[0].system[1].text.includes('"numeroDocumento"'));
   confere('estado vai junto dos dados da empresa (2º bloco, cache 1h), fora do bloco fixo', chamadas[0].system.length === 2 && chamadas[0].system[1].cache_control && chamadas[0].system[1].cache_control.ttl === '1h' && chamadas[0].system[1].text.includes('ESTADO SALVO DO TRABALHO') && !chamadas[0].system[0].text.includes('ESTADO SALVO DO TRABALHO NESTA EMPRESA'));
   const baixa = r.arquivosGerados.find((a) => a.nome === 'baixa_ser.txt');
   confere('baixa de nota que já existe no Contas a Receber (fora do último ServicoPrest) NÃO gera aviso falso', baixa && baixa.avisos.length === 0, JSON.stringify(baixa && baixa.avisos));

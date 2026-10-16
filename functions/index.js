@@ -8,7 +8,7 @@ const ExcelJS = require("exceljs");
 const { initializeApp: initClientApp } = require("firebase/app");
 const { getAuth, signInAnonymously } = require("firebase/auth");
 const { getFirestore: getClientFirestore, doc: clientDoc, getDoc: clientGetDoc, collection: clientCollection, query: clientQuery, where, getDocs, limit: clientLimit } = require("firebase/firestore");
-const { randomUUID } = require("crypto");
+const { randomUUID, createHash } = require("crypto");
 
 initializeApp();
 const db = getFirestore();
@@ -1152,6 +1152,14 @@ const LIMITE_ESTADO_ARQUIVOS_CHARS = 60000;
 function chaveNomeEntidade(nome) {
   return stripAccentsJs(String(nome || "")).toUpperCase().replace(/\s+/g, " ").trim();
 }
+// Linhas de arquivo como tabela (nomes dos campos uma vez só no cabeçalho): bem menos tokens que
+// repetir as chaves em cada linha de JSON.
+function linhasEmTabela(linhas) {
+  const campos = [];
+  for (const l of linhas) for (const k of Object.keys(l || {})) if (!campos.includes(k)) campos.push(k);
+  const valor = (v) => (v == null ? "" : String(v).replace(/[|\r\n]+/g, " ").trim());
+  return [campos.join(" | "), ...linhas.map((l) => campos.map((k) => valor(l && l[k])).join(" | "))].join("\n");
+}
 function montarBlocoEstado(estado) {
   if (!estado || typeof estado !== "object") return null;
   const partes = [];
@@ -1167,13 +1175,13 @@ function montarBlocoEstado(estado) {
   let usado = 0;
   for (const [tipo, a] of arquivos) {
     if (!a || !Array.isArray(a.linhas)) continue;
-    const json = JSON.stringify(a.linhas);
+    const json = linhasEmTabela(a.linhas);
     if (usado + json.length > LIMITE_ESTADO_ARQUIVOS_CHARS) {
       partes.push(`ÚLTIMO ARQUIVO ${tipo} (${a.nome || tipo}): ${a.linhas.length} linha(s) — linhas omitidas aqui por tamanho; se precisar corrigir, peça ao usuário pra reenviar ou refaça do relatório.`);
       continue;
     }
     usado += json.length;
-    partes.push(`ÚLTIMO ARQUIVO GERADO — ${tipo} (${a.nome || tipo}, ${a.linhas.length} linha(s), gerado em ${a.geradoEm || "data desconhecida"}). Estas são as linhas EXATAS enviadas a gerar_arquivo; ao corrigir, parta delas e gere o arquivo COMPLETO:\n${json}`);
+    partes.push(`ÚLTIMO ARQUIVO GERADO — ${tipo} (${a.nome || tipo}, ${a.linhas.length} linha(s), gerado em ${a.geradoEm || "data desconhecida"}). Estas são as linhas EXATAS enviadas a gerar_arquivo, em tabela (1ª linha = nomes dos campos, valores separados por " | "; vazio = campo omitido). Ao corrigir, parta delas, use os mesmos nomes de campo (números como número) e gere o arquivo COMPLETO:\n${json}`);
   }
   if (!partes.length) return null;
   return `ESTADO SALVO DO TRABALHO NESTA EMPRESA (gravado pelo sistema nas mensagens anteriores; é mais confiável que a sua memória da conversa):\n\n${partes.join("\n\n")}`;
@@ -1185,7 +1193,7 @@ function buildSystemPrompt(empresaNome, notas, documentos, cadastro, fechamento)
   const codigo = cadastro && cadastro.codigo;
   const cnpj = cadastro && cadastro.cnpj;
   const cadastroTexto = (codigo || cnpj)
-    ? `\nCódigo no Domínio: ${codigo || "(não informado)"} | CNPJ: ${cnpj || "(não informado)"} — use esses dados nos arquivos (campo "codigoEmp" dos Lançamentos, por exemplo) sem perguntar de novo.`
+    ? `\nCódigo no Domínio: ${codigo || "(não informado)"} | CNPJ: ${cnpj || "(não informado)"} — use esses dados nos arquivos sem perguntar de novo (o codigoEmp dos Lançamentos o sistema já preenche sozinho).`
     : "";
   const fechamentoTexto = fechamento
     ? `Competência em andamento: ${fechamento.competencia}. Relatórios já recebidos: ${(fechamento.relatorios || []).join(", ") || "nenhum ainda"}. Pendências abertas: ${fechamento.pendencias ?? "não informado"}. Arquivos já gerados: ${(fechamento.arquivos || []).join(", ") || "nenhum"}.`
@@ -1313,7 +1321,7 @@ Qual delas gostaria de importar primeiro?"
 
 Quando o usuário escolher um (pelo número ou nome), na sua PRÓXIMA resposta chame a ferramenta gerar_arquivo — ela é a ÚNICA forma de entregar um arquivo, e vira um botão de download de verdade. Chame a ferramenta primeiro e só depois de receber o resultado escreva a confirmação curta (ex: "Aqui está o arquivo, revise antes de importar."); se o resultado vier com erro, corrija e chame de novo, ou explique ao usuário o que falta. Se o usuário pediu vários tipos diferentes de arquivo (ex.: NF de rendimentos E NF de aluguel), chame a ferramenta de cada tipo E escreva confirmação curta ANTES de passar para o próximo tipo — uma tipo por resposta para evitar confusão, ou se fizer tudo na mesma resposta, sempre escreva algo entre uma chamada e a próxima (ex: "Gerado. Agora o de aluguel: ..."). NUNCA diga que gerou ou enviou um arquivo sem ter recebido sucesso da ferramenta nesta mesma resposta. Respostas antigas desta conversa podem dizer "aqui está o arquivo" — só as que têm o "[Registro do sistema: ... gerar_arquivo ...]" realmente geraram algo; as outras não entregaram nada, e pra entregar agora é preciso chamar a ferramenta de novo. NUNCA escreva as linhas/lançamentos por extenso no texto da resposta (nada de listar data, valor, débito/crédito etc. linha por linha na mensagem) — essa informação já vai dentro do arquivo gerado, repetir é redundante; o texto da resposta deve ser só a confirmação curta. Nunca invente uma linha que não foi confirmada na conversa. Parâmetros da ferramenta gerar_arquivo ("tipo" e "linhas"), por tipo:
 
-- Lançamentos: {"tipo":"lanctos","linhas":[{"data":"DD/MM/AAAA","debito":"código","credito":"código","valor":0,"codHist":"","complemento":"texto","iniciaLote":"1 ou vazio","codigoEmp":"código","centroCustoDebito":"","centroCustoCredito":""}]}
+- Lançamentos: {"tipo":"lanctos","linhas":[{"data":"DD/MM/AAAA","debito":"código","credito":"código","valor":0,"complemento":"texto","iniciaLote":"1 ou omitido"}]} — campos opcionais que você pode OMITIR quando vazios: codHist, centroCustoDebito e centroCustoCredito; codigoEmp também pode ser omitido quando o código da empresa já consta nos DADOS DESTA EMPRESA (o sistema preenche sozinho em todas as linhas)
   PARTIDAS MÚLTIPLAS (um valor rateado em várias contas): monte um lote. A primeira linha do lote leva "iniciaLote": "1"; as linhas seguintes, até o próximo "1", pertencem a ele. Só dentro de um lote uma linha pode ter apenas "debito" ou apenas "credito" (deixe o outro em branco), e a soma dos débitos do lote tem que ser igual à soma dos créditos — senão o arquivo é recusado. Lançamento simples (uma conta a débito e outra a crédito na mesma linha) TAMBÉM leva "iniciaLote": "1" — é o lote dele mesmo, de uma linha só (ver a regra de INICIA LOTE acima).
   HISTÓRICO (campo "complemento") — NÃO invente a redação. Cada empresa tem um padrão de histórico próprio, que já está no Diário dela (no histórico de relatórios processados): use a MESMA redação que aparece lá pra aquele tipo de lançamento, copiando o jeito de escrever (abreviações, ordem das palavras, se cita nome de fornecedor/sócio, se cita número de documento). Quando for um tipo de lançamento que ainda não existe no Diário, siga o estilo dos históricos parecidos que já existem e confirme com o usuário antes de fechar o arquivo, em vez de inventar um texto novo do seu jeito.
 - Baixa de Entradas: {"tipo":"baixa_ent","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0}]}
@@ -1329,7 +1337,7 @@ Quando o usuário escolher um (pelo número ou nome), na sua PRÓXIMA resposta c
 Depois de gerar um arquivo, se ainda houver outros tipos pendentes, ofereça a lista de novo (menos o que já foi gerado).
 
 ONDE EMITIR CADA RELATÓRIO NO SISTEMA DOMÍNIO — só explique isso se o usuário perguntar onde emitir, não coloque isso de graça em outras respostas. Diga o caminho em texto, inclua a tag de imagem do caminho, e sempre que houver configurações específicas pra marcar na tela de emissão, explique elas também e inclua a tag de imagem da emissão logo depois (as tags viram prints de tela de verdade antes do usuário ver a mensagem — nunca invente um caminho, configuração ou tag que não esteja nesta lista). Sempre que o relatório pedir um período (Data inicial/final, ou "Posição em"), lembre o usuário de usar o mês que está sendo fechado:
-- Diário: Módulo Contábil → Relatórios → Diário {{IMG:diario}}. Na emissão, use o período do mês sendo fechado, marque "Identificação da conta: Código", "Conta crédito e débito na mesma linha", "Destacar linhas" e "Não imprimir a expressão 'Transporte'" {{IMG:diario-emissao}}
+- Diário: Módulo Contábil → Relatórios → Diário {{IMG:diario}}. Na emissão, use o período do mês sendo fechado, marque "Identificação da conta: Código", "Conta crédito e débito na mesma linha", "Destacar linhas" e "Não imprimir a expressão 'Transporte'" {{IMG:diario-emissao}} IMPORTANTE: assim que receber um Diário ou um Plano de Contas, ANTES de qualquer outra coisa confira se as contas aparecem pelo CÓDIGO NUMÉRICO (ex.: 8, 384, 865) e não só pela classificação/máscara com pontos (ex.: 1.1.2.01.000). Se só vier a máscara, avise na hora, em uma frase, que o relatório precisa ser emitido de novo com "Identificação da conta: Código" {{IMG:diario-emissao}}, e não use esse arquivo pra montar lançamentos nem peça mais nada antes disso.
 - Plano de Contas: Módulo Contábil → Relatórios → Cadastrais → Contas {{IMG:plano-de-contas}}. Na emissão, marque "Destacar contas sintéticas" e "Destacar linhas" {{IMG:plano-de-contas-emissao}}
 - Contas a Receber: Módulo Escrita Fiscal → Relatórios → Contas a Pagar e Receber → A Receber {{IMG:contas-a-receber}}. Na emissão, em Situação marque "Aberta/Recebida parcial" e marque "Posição em" com a data final do mês sendo fechado {{IMG:contas-a-receber-emissao}}
 - Contas a Pagar: Módulo Escrita Fiscal → Relatórios → Contas a Pagar e Receber → A Pagar {{IMG:contas-a-pagar}}. Na emissão, em Situação marque "Aberta/Paga parcial" e marque "Posição em" com a data final do mês sendo fechado {{IMG:contas-a-pagar-emissao}}
@@ -1922,6 +1930,12 @@ exports.assistenteChat = onCall(
     }
 
     function gerarArquivo(spec) {
+      // A IA não precisa escrever o código da empresa em cada linha dos lançamentos: se a empresa
+      // tem código cadastrado e a linha veio sem, o servidor preenche (menos tokens de saída).
+      const codEmp = String(empresa.codigoDominio || "").replace(/\D/g, "");
+      if (spec && spec.tipo === "lanctos" && Array.isArray(spec.linhas) && codEmp) {
+        spec = { ...spec, linhas: spec.linhas.map((l) => (l && (l.codigoEmp == null || String(l.codigoEmp).trim() === "") ? { ...l, codigoEmp: codEmp } : l)) };
+      }
       const arquivo = buildArquivoGerado(spec);
       if (!arquivo) throw new Error("tipo de arquivo desconhecido ou sem linhas");
       arquivosGerados.push(arquivo);
@@ -2266,6 +2280,13 @@ exports.assistenteChat = onCall(
           .collection("documentos")
           .add({
             arquivos: fileNames,
+            // hash do conteúdo: o app compara o arquivo que o usuário vai anexar com estes pra
+            // avisar quando for um reenvio idêntico (gasta token à toa; o resumo já está no histórico)
+            arquivosInfo: arquivosParaGuardar.map((f) => ({
+              nome: f.name,
+              tamanho: Buffer.from(f.base64, "base64").length,
+              hash: createHash("sha256").update(Buffer.from(f.base64, "base64")).digest("hex"),
+            })),
             resumo: text,
             criadoEm: FieldValue.serverTimestamp(),
           });
