@@ -536,6 +536,9 @@
   .pag-card.suspeita { border-color: #e0a800; box-shadow: 0 0 0 1px #e0a800 inset; }
   .pag-etiqueta { font-size: 0.7rem; font-weight: 600; color: #b58900; background: rgba(224,168,0,0.15); border-radius: 6px; padding: 2px 6px; align-self: flex-start; }
   .pag-toolbar button.pag-btn-suspeitas { border-color: #e0a800; color: #b58900; }
+  .attach-chip .attach-analisando { color: var(--text-faint); font-size: 0.74rem; font-style: italic; }
+  .send-btn.aguardando { opacity: 0.45; cursor: not-allowed; }
+  .composer-hint.aviso-analise { color: #b58900; font-weight: 600; }
   .attach-chip .attach-aviso { color: #b58900; font-size: 0.74rem; font-weight: 600; text-decoration: underline dotted; text-underline-offset: 3px; }
   .pag-topo { display: flex; align-items: center; justify-content: space-between; font-size: 0.78rem; }
   .pag-topo label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
@@ -1952,6 +1955,49 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   // Mesmo critério do servidor: menos de 120 caracteres de texto. Só avisa; quem decide é a pessoa.
   const pdfSuspeitas = new Map();
   const PAG_POBRE_CHARS = 120;
+  // Arquivos que ainda estão sendo analisados (senha, reenvio, páginas com imagem/pouco texto).
+  // Enquanto algum anexo da mensagem estiver aqui, o envio fica bloqueado: o aviso de páginas
+  // tem que chegar ANTES de o arquivo ir pra IA, não depois.
+  const arquivosEmAnalise = new Set();
+  const analiseEmAndamento = () => pendingFiles.some((f) => arquivosEmAnalise.has(f));
+  let avisoAnaliseTimer = null;
+  function restaurarDicaDoComposer() {
+    clearTimeout(avisoAnaliseTimer);
+    const dica = document.querySelector('.composer-hint');
+    if (dica && dica.dataset.padrao !== undefined) {
+      dica.textContent = dica.dataset.padrao;
+      dica.classList.remove('aviso-analise');
+    }
+  }
+  function avisarAnaliseEmAndamento() {
+    const dica = document.querySelector('.composer-hint');
+    if (!dica) return;
+    if (dica.dataset.padrao === undefined) dica.dataset.padrao = dica.textContent;
+    dica.textContent = '⏳ Aguarde: ainda estou analisando o(s) arquivo(s) anexado(s). O envio libera assim que terminar.';
+    dica.classList.add('aviso-analise');
+    clearTimeout(avisoAnaliseTimer);
+    avisoAnaliseTimer = setTimeout(restaurarDicaDoComposer, 6000);
+  }
+  // true = não deixa enviar agora (e explica por quê)
+  function envioBloqueadoPorAnalise() {
+    if (!analiseEmAndamento()) return false;
+    avisarAnaliseEmAndamento();
+    return true;
+  }
+  function atualizarBloqueioVisual() {
+    const emAnalise = analiseEmAndamento();
+    const botao = document.getElementById('sendBtn');
+    if (botao) {
+      botao.classList.toggle('aguardando', emAnalise);
+      botao.title = emAnalise ? 'Aguarde: analisando os arquivos anexados' : '';
+    }
+    if (!emAnalise) restaurarDicaDoComposer();
+  }
+  function comTempoLimite(promessa, ms) {
+    let t;
+    const limite = new Promise((_, rej) => { t = setTimeout(() => rej(new Error('tempo esgotado')), ms); });
+    return Promise.race([promessa, limite]).finally(() => clearTimeout(t));
+  }
   async function suspeitasDoDoc(doc) {
     const OPS = pdfjsLib.OPS || {};
     const opsImagem = new Set([OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject].filter((x) => x !== undefined));
@@ -2059,7 +2105,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   }
   async function enviosAnteriores() {
     if (!activeEmpresaId) return [];
-    const snap = await getDocs(query(collection(db, "assistenteIA_empresas", activeEmpresaId, "documentos"), orderBy("criadoEm", "desc")));
+    const snap = await comTempoLimite(getDocs(query(collection(db, "assistenteIA_empresas", activeEmpresaId, "documentos"), orderBy("criadoEm", "desc"))), 8000);
     const lista = [];
     snap.forEach((d) => {
       const x = d.data();
@@ -2113,12 +2159,16 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   async function inspecionarPdf(f) {
     if (!ehPdf(f) || typeof pdfjsLib === 'undefined') return;
     let doc = null;
-    try {
+    async function analisar() {
       const s = pdfSenhas.get(f);
       doc = await pdfjsLib.getDocument({ data: new Uint8Array(await f.arrayBuffer()), ...(s ? { password: s.senha } : {}) }).promise;
       if (!doc.numPages || doc.numPages < 2) return;
       const lista = await suspeitasDoDoc(doc);
       if (lista.length) pdfSuspeitas.set(f, lista);
+    }
+    try {
+      // teto de 60 s só pra um PDF defeituoso não travar o envio pra sempre
+      await comTempoLimite(analisar(), 60000);
     } catch (err) {
       console.warn('Não consegui inspecionar as páginas do PDF:', err);
     } finally {
@@ -2127,13 +2177,22 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   }
   async function anexarArquivos(lista) {
     pendingFiles.push(...lista);
+    // Tudo o que ainda vai ser checado (senha, reenvio, páginas com imagem/pouco texto) bloqueia
+    // o envio até terminar. Imagens não têm análise e não bloqueiam.
+    const aAnalisar = lista.filter((f) => !String(f.type || '').startsWith('image/'));
+    aAnalisar.forEach((f) => arquivosEmAnalise.add(f));
     renderAttachPreview();
-    await tratarPdfsProtegidos(lista);
-    await tratarDuplicados(lista.filter((f) => pendingFiles.includes(f)));
-    // avisa de páginas com imagem/pouco texto; com um único PDF assim, já abre pra revisão
-    const novos = lista.filter((f) => pendingFiles.includes(f));
-    await Promise.all(novos.map(inspecionarPdf));
-    renderAttachPreview();
+    let novos = [];
+    try {
+      await tratarPdfsProtegidos(lista);
+      await tratarDuplicados(lista.filter((f) => pendingFiles.includes(f)));
+      novos = lista.filter((f) => pendingFiles.includes(f));
+      await Promise.all(novos.map(inspecionarPdf));
+    } finally {
+      aAnalisar.forEach((f) => arquivosEmAnalise.delete(f));
+      renderAttachPreview();
+    }
+    // com um único PDF com páginas suspeitas, já abre pra revisão
     const comAviso = novos.filter((f) => pdfSuspeitas.has(f) && pendingFiles.includes(f));
     if (comAviso.length === 1) abrirPreviewAnexo(comAviso[0], pendingFiles.indexOf(comAviso[0]));
   }
@@ -2403,6 +2462,12 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         : f.name;
       nomeBtn.addEventListener('click', () => abrirPreviewAnexo(f, i));
       chip.append(nomeBtn, document.createTextNode(' '));
+      if (arquivosEmAnalise.has(f)) {
+        const an = document.createElement('span');
+        an.className = 'attach-analisando';
+        an.textContent = '⏳ analisando as páginas...';
+        chip.append(an, document.createTextNode(' '));
+      }
       const suspOrig = pdfSuspeitas.get(reduzido ? reduzido.original : f);
       const suspAtivas = suspOrig ? suspOrig.filter((x) => !reduzido || reduzido.marcadas[x.n - 1]) : [];
       if (suspAtivas.length) {
@@ -2427,6 +2492,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       chip.appendChild(remove);
       attachPreview.appendChild(chip);
     });
+    atualizarBloqueioVisual();
   }
 
   messageInput.addEventListener('input', () => {
@@ -2457,6 +2523,8 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const empresaIdEnvio = activeEmpresaId;
     const text = messageInput.value.trim();
     if (!text && pendingFiles.length === 0) return;
+    // não deixa enviar enquanto a análise dos anexos (senha, reenvio, páginas) não terminou
+    if (envioBloqueadoPorAnalise()) return;
 
     let totalBytes = 0;
     for (const f of pendingFiles) {
