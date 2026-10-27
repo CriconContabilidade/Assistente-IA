@@ -15,14 +15,14 @@
     --panel: rgba(180,200,255,0.05);
     --panel-solid: #0b0f1e;
     --panel-border: rgba(160,180,255,0.1);
-    --accent1: #4f6bff;
-    --accent2: #38bdf8;
-    --accent-grad: linear-gradient(135deg, #4f6bff, #38bdf8);
+    --accent1: #7c3aed;
+    --accent2: #b794ff;
+    --accent-grad: linear-gradient(135deg, #7c3aed, #b794ff);
     --text: #e8edfb;
     --text-dim: #8992b8;
     --text-faint: #4c5378;
     --danger: #f87171;
-    --ok: #34d399;
+    --ok: #a45bff;
   }
 
   * { box-sizing: border-box; }
@@ -247,8 +247,9 @@
   }
   .empresa-item:hover { background: rgba(255,255,255,0.04); }
   .empresa-item.active {
-    background: linear-gradient(135deg, rgba(139,92,246,0.16), rgba(34,211,238,0.10));
-    border-color: rgba(139,92,246,0.35);
+    background: linear-gradient(135deg, rgba(124,58,237,0.5), rgba(183,148,255,0.25));
+    border-color: rgba(183,148,255,0.55);
+    box-shadow: 0 0 14px rgba(138,43,255,0.25);
   }
   .empresa-avatar {
     width: 30px; height: 30px; border-radius: 9px; flex-shrink: 0;
@@ -269,9 +270,11 @@
      clicar (toggle do rótulo) mostra a descrição, sem ocupar espaço fixo na barra lateral.
      Fica encostada no final da linha do nome do usuário (margin-left:auto empurra ela). */
   .status-dot {
-    width: 10px; height: 10px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 6px var(--ok);
+    width: 10px; height: 10px; border-radius: 50%; background: #8a2bff; box-shadow: 0 0 6px #8a2bff, 0 0 12px rgba(138,43,255,0.65);
     border: none; padding: 0; cursor: pointer; flex-shrink: 0; margin-left: auto;
   }
+  /* IA sem crédito / no limite: apagada, sem brilho */
+  .status-dot.offline { background: #6b7280; box-shadow: none; }
   .status-dot-label { font-size: 0.72rem; color: var(--text-dim); }
   .user-name-row { display: flex; align-items: center; gap: 7px; font-size: 0.85rem; font-weight: 600; color: var(--text); }
   .user-avatar-emoji { font-size: 1.15rem; line-height: 1; }
@@ -306,6 +309,8 @@
     display: flex; align-items: center; justify-content: space-between;
     padding: 16px 26px; border-bottom: 1px solid var(--panel-border);
     background: rgba(10,14,26,0.5); backdrop-filter: blur(10px);
+    border-image: linear-gradient(90deg, #7c3aed, #b794ff, rgba(183,148,255,0)) 1;
+    border-bottom-width: 2px;
   }
   .main-header h3 { margin: 0; font-size: 1.02rem; font-weight: 700; }
   .main-header .sub { font-size: 0.76rem; color: var(--text-dim); margin-top: 2px; }
@@ -364,7 +369,7 @@
      aos 12s (achado do Antigravity). */
   #typingIndicator .msg-bubble { min-width: 240px; }
   .msg.assistant .msg-bubble { background: var(--panel); border-top-left-radius: 4px; }
-  .msg.user .msg-bubble { background: linear-gradient(135deg, rgba(139,92,246,0.18), rgba(34,211,238,0.1)); border-top-right-radius: 4px; }
+  .msg.user .msg-bubble { background: linear-gradient(135deg, rgba(139,92,246,0.18), rgba(183,148,255,0.12)); border-top-right-radius: 4px; }
   .msg-bubble .file-chip {
     display: inline-flex; align-items: center; gap: 6px;
     background: rgba(255,255,255,0.06); border: 1px solid var(--panel-border);
@@ -415,8 +420,8 @@
   }
   /* recebido acende; faltando fica apagado — é o "o que já mandei e o que falta" */
   .cartao-rel.ok {
-    color: var(--text); border-color: rgba(52,211,153,0.35);
-    background: rgba(52,211,153,0.08);
+    color: var(--text); border-color: rgba(164,91,255,0.4);
+    background: rgba(164,91,255,0.1);
   }
   .cartao-rel .marca { font-size: 0.7rem; }
   .cartao-rel.ok .marca { color: var(--ok); }
@@ -426,7 +431,7 @@
     background: rgba(242,193,78,0.12); color: #f2c14e; border: 1px solid rgba(242,193,78,0.3);
   }
   .painel-pendencias.zerado {
-    background: rgba(52,211,153,0.1); color: var(--ok); border-color: rgba(52,211,153,0.3);
+    background: rgba(164,91,255,0.12); color: var(--ok); border-color: rgba(164,91,255,0.35);
   }
 
   /* ---------- grade de conferência do arquivo gerado ---------- */
@@ -479,7 +484,7 @@
   }
 
   .send-btn:disabled { opacity: 0.7; cursor: wait; animation: sendPulse 1.4s infinite ease-in-out; }
-  @keyframes sendPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(56,189,248,0.4); } 50% { box-shadow: 0 0 0 6px rgba(56,189,248,0); } }
+  @keyframes sendPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(183,148,255,0.4); } 50% { box-shadow: 0 0 0 6px rgba(183,148,255,0); } }
 
   /* ---------- composer ---------- */
   .composer-wrap { padding: 16px 26px 22px; }
@@ -490,7 +495,7 @@
     backdrop-filter: blur(14px);
     transition: border-color .15s;
   }
-  .composer.drag-over { border-color: var(--accent2); box-shadow: 0 0 0 2px rgba(34,211,238,0.25); }
+  .composer.drag-over { border-color: var(--accent2); box-shadow: 0 0 0 2px rgba(183,148,255,0.3); }
   .composer textarea {
     flex: 1; background: none; border: none; outline: none; resize: none;
     color: var(--text); font-size: 0.92rem; font-family: inherit; line-height: 1.5;
@@ -590,7 +595,7 @@
     border: 1px solid var(--panel-border); background: rgba(255,255,255,0.03); color: var(--text);
     text-align: left; cursor: pointer; font: inherit;
   }
-  .resp-item:hover, .resp-item:focus-visible { border-color: var(--accent2); outline: none; background: rgba(56,189,248,0.08); }
+  .resp-item:hover, .resp-item:focus-visible { border-color: var(--accent2); outline: none; background: rgba(183,148,255,0.08); }
   .resp-item.atual { border-color: var(--accent2); }
   .resp-avatar {
     width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center;
@@ -663,7 +668,7 @@
   }
   .cad-table td { padding: 5px 8px; border-bottom: 1px solid var(--panel-border); color: var(--text); vertical-align: top; }
   .cad-vinculo-chip {
-    display: inline-block; background: rgba(56,189,248,0.12); color: var(--accent2);
+    display: inline-block; background: rgba(183,148,255,0.12); color: var(--accent2);
     border-radius: 10px; padding: 1px 7px; font-size: 0.68rem; margin: 1px 3px 1px 0; white-space: nowrap;
   }
   .cad-field label { display: block; font-size: 0.74rem; color: var(--text-dim); margin-bottom: 4px; }
@@ -1121,6 +1126,30 @@
     document.getElementById('statusDotLabel').hidden = !document.getElementById('statusDotLabel').hidden;
   });
 
+  // Status da IA: fica "conectada" até uma chamada voltar sem crédito/no limite; volta ao normal
+  // na próxima resposta bem-sucedida. Guardado no navegador pra não "voltar a conectada" no F5.
+  const IA_OFFLINE_KEY = 'stagiarioIaOffline';
+  function setIaStatus(online, motivo) {
+    const dot = document.getElementById('statusDot');
+    const label = document.getElementById('statusDotLabel');
+    const textos = {
+      'sem-credito': 'IA offline — sem créditos na API',
+      'limite': 'IA offline — limite de uso atingido, tente em alguns minutos'
+    };
+    const txt = online ? 'IA conectada' : (textos[motivo] || 'IA offline');
+    dot.classList.toggle('offline', !online);
+    dot.title = online ? 'IA conectada — pronta pra processar mensagens' : txt;
+    label.textContent = txt;
+    try {
+      if (online) localStorage.removeItem(IA_OFFLINE_KEY);
+      else localStorage.setItem(IA_OFFLINE_KEY, motivo || 'offline');
+    } catch (e) { /* sem localStorage: só não lembra no próximo carregamento */ }
+  }
+  try {
+    const m = localStorage.getItem(IA_OFFLINE_KEY);
+    if (m) setIaStatus(false, m);
+  } catch (e) { /* ignora */ }
+
   // ---------------- empresas ----------------
   const SEED_EMPRESAS = [
     "Gladius", "Holding AFA", "Holding EBR", "Holding GBG", "Holding LTA",
@@ -1285,7 +1314,11 @@
 
   function responsavelLabel(emp) {
     if (!emp.responsavelEmail) return "Sem responsável — visível pra todos";
-    return "👤 " + nomeDoUsuario(emp.responsavelEmail);
+    return emojiDoUsuario(emp.responsavelEmail) + " " + nomeDoUsuario(emp.responsavelEmail);
+  }
+  function emojiDoUsuario(email) {
+    const u = USUARIOS_CONHECIDOS[String(email || '').trim().toLowerCase()];
+    return u ? u.emoji : '👤';
   }
 
   // Modal próprio no lugar de window.prompt() — o prompt() nativo não funciona dentro do
@@ -1517,7 +1550,7 @@
         assign.className = 'assign-btn';
         assign.type = 'button';
         assign.title = 'Atribuir responsável';
-        assign.textContent = '👤';
+        assign.textContent = emojiDoUsuario(emp.responsavelEmail);
         item.appendChild(assign);
 
         const nivelAtual = ESFORCO_ORDEM.includes(emp.esforco) ? emp.esforco : 'low';
@@ -2585,11 +2618,17 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       });
 
       hideTyping();
+      setIaStatus(true);
       // A própria função já grava a resposta no Firestore (veja o comentário no backend) —
       // não grava de novo aqui, só espera o onSnapshot trazer ela.
     } catch (err) {
       hideTyping();
       console.error('Erro chamando a IA:', err);
+      if (err && err.code === 'functions/resource-exhausted') {
+        setIaStatus(false, err.details && err.details.motivo);
+        mostrarErroLocal(err.message);
+        return;
+      }
       // "already-exists": outra chamada com o mesmo requestId já está processando (ex.: clique
       // duplo) — não é um erro de verdade, a resposta de verdade já está a caminho no chat.
       if (err && err.code === 'functions/already-exists') { isSending = false; setComposerBusy(false); return; }
