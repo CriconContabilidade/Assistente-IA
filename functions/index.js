@@ -1739,7 +1739,7 @@ exports.assistenteChat = onCall(
         // Saldo da API acabou (a Anthropic devolve 400 "credit balance is too low" ou 402) ou limite
         // de uso estourado (429): repetir não adianta, e o 400 NÃO pode cair no "recusou as
         // ferramentas" abaixo. O código "resource-exhausted" faz a tela marcar a IA como offline.
-        if (err && (err.status === 402 || (err.status === 400 && /credit balance|billing/i.test(String(err.message))))) {
+        if (err && (err.status === 402 || ([400, 403].includes(err.status) && /credit|billing|usage limit|spend limit|spending limit|balance|quota/i.test(String(err.message))))) {
           console.error("API SEM CRÉDITO:", err.message);
           throw new HttpsError("resource-exhausted", "A IA está sem créditos no momento. Avise o administrador para recarregar o saldo da API.", { motivo: "sem-credito" });
         }
