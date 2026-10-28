@@ -36,6 +36,7 @@ async function caso(nome, esperado, promessa) {
     await setDoc(doc(db, 'assistenteIA_empresas/semcampo'), { ...base, nome: 'Sem campo' });
     await setDoc(doc(db, 'assistenteIA_empresas/semcampo2'), { ...base, nome: 'Sem campo 2' });
     await setDoc(doc(db, 'assistenteIA_empresas/minha/fechamentos/2026-09'), { competencia: '09/2026' });
+    await setDoc(doc(db, 'assistenteIA_empresas/minha/consumo/2026-10'), { custoUsd: 0.5 });
     for (const id of ['minha', 'alheia']) {
       await setDoc(doc(db, `assistenteIA_empresas/${id}/mensagens/m1`), { role: 'user', text: 'oi' });
       await setDoc(doc(db, `assistenteIA_empresas/${id}/documentos/d1`), { resumo: 'x' });
@@ -124,6 +125,10 @@ async function caso(nome, esperado, promessa) {
   else { falhas++; console.log('  FALHA painel escolheu', recente && recente.data().competencia); }
   await caso('NÃO lê fechamento de outro', 'falha', getDocs(collection(func, 'assistenteIA_empresas/alheia/fechamentos')));
   await caso('NÃO grava fechamento', 'falha', setDoc(doc(func, 'assistenteIA_empresas/minha/fechamentos/2026-09'), { competencia: '09/2026' }));
+  await caso('func NÃO lê consumo (valores em dólar) nem da própria', 'falha', getDoc(doc(func, 'assistenteIA_empresas/minha/consumo/2026-10')));
+  await caso('admin lê consumo', 'ok', getDoc(doc(admin, 'assistenteIA_empresas/minha/consumo/2026-10')));
+  await caso('admin NÃO grava consumo direto', 'falha', setDoc(doc(admin, 'assistenteIA_empresas/minha/consumo/2026-10'), { custoUsd: 0 }));
+  await caso('func NÃO altera limite nem percentual da empresa', 'falha', updateDoc(doc(func, 'assistenteIA_empresas/minha'), { limiteMensalUsd: 99, usoPct: 0 }));
 
   console.log('\nSUBCOLEÇÕES SÓ DA CLOUD FUNCTION (achado do Codex: faltava teste explícito)');
   // padroes, processamentos e documentos/{id}/conteudo(/pedacos) não têm nenhum match próprio

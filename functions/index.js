@@ -1252,6 +1252,83 @@ function custoEstimadoUsd(t) {
   return (t.entrada * p.entrada + t.lido * p.lido + t.gravado5m * p.gravado5m + t.gravado1h * p.gravado1h + t.saida * p.saida) / 1e6;
 }
 
+// ---------------- limite de consumo por empresa ----------------
+// Limite mensal em US$ (custo estimado acima). O admin ajusta por empresa pela tela
+// (campo limiteMensalUsd); sem valor gravado, vale o padrão: US$ 0,30 pras empresas da lista
+// abaixo (casadas por trecho do nome, sem acento/maiúscula) e US$ 0,20 pras demais.
+// Teto do escritório inteiro (soma de todas as empresas no mês), em US$. O admin ajusta pela
+// tela; o valor gravado fica em assistenteIA_consumoGeral/config.
+const LIMITE_GERAL_PADRAO_USD = 20;
+const LIMITE_PADRAO_USD = 0.2;
+const LIMITE_ALTO_USD = 0.3;
+const EMPRESAS_LIMITE_ALTO = ["ferrara", "gladius", "mantovani", "mantonvani", "rainha", "alexandre", "servicos medicos", "sindisaude"];
+function semAcento(t) {
+  return String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+function limiteGeralEscritorio(config) {
+  const gravado = config && Number(config.limiteUsd);
+  return Number.isFinite(gravado) && gravado > 0 ? gravado : LIMITE_GERAL_PADRAO_USD;
+}
+function limiteMensalEmpresa(empresa) {
+  const gravado = empresa && Number(empresa.limiteMensalUsd);
+  if (Number.isFinite(gravado) && gravado > 0) return gravado;
+  const nome = semAcento(empresa && empresa.nome);
+  return EMPRESAS_LIMITE_ALTO.some((n) => nome.includes(n)) ? LIMITE_ALTO_USD : LIMITE_PADRAO_USD;
+}
+// Mês do consumo (AAAA-MM) no fuso de Brasília, pra virada do mês bater com a do escritório.
+function mesConsumo(data) {
+  const partes = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit" })
+    .formatToParts(data || new Date());
+  const ano = partes.find((x) => x.type === "year").value;
+  const mes = partes.find((x) => x.type === "month").value;
+  return `${ano}-${mes}`;
+}
+function empresaRef0(empresaId) {
+  return db.collection("assistenteIA_empresas").doc(empresaId);
+}
+function percentualUso(custoUsd, limiteUsd) {
+  if (!(limiteUsd > 0)) return 0;
+  return Math.round((100 * (custoUsd || 0)) / limiteUsd);
+}
+function limiteAtingido(custoUsd, limiteUsd) {
+  return (custoUsd || 0) >= limiteUsd;
+}
+
+// Soma o gasto de uma chamada à IA no consumo do mês da empresa (só admin lê esse documento,
+// com os valores em dólar) e deixa na própria empresa só o percentual, que a tela mostra pra
+// todos. Em transação: várias mensagens da mesma empresa podem terminar ao mesmo tempo.
+async function registrarConsumo(empresaId, custoUsd, tokens) {
+  const mes = mesConsumo();
+  const empresaRef = db.collection("assistenteIA_empresas").doc(empresaId);
+  const consumoRef = empresaRef.collection("consumo").doc(mes);
+  const geralRef = db.collection("assistenteIA_consumoGeral").doc(mes);
+  await db.runTransaction(async (tx) => {
+    const [empSnap, conSnap, geralSnap] = await Promise.all([tx.get(empresaRef), tx.get(consumoRef), tx.get(geralRef)]);
+    const atual = conSnap.exists ? conSnap.data() : {};
+    const novoCusto = (atual.custoUsd || 0) + custoUsd;
+    const limite = limiteMensalEmpresa(empSnap.exists ? empSnap.data() : {});
+    tx.set(consumoRef, {
+      mes,
+      custoUsd: novoCusto,
+      chamadas: (atual.chamadas || 0) + 1,
+      entrada: (atual.entrada || 0) + (tokens.entrada || 0),
+      saida: (atual.saida || 0) + (tokens.saida || 0),
+      cacheLido: (atual.cacheLido || 0) + (tokens.lido || 0),
+      cacheGravado: (atual.cacheGravado || 0) + (tokens.gravado || 0),
+      atualizadoEm: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    tx.set(geralRef, {
+      mes,
+      custoUsd: ((geralSnap.exists ? geralSnap.data().custoUsd : 0) || 0) + custoUsd,
+      chamadas: ((geralSnap.exists ? geralSnap.data().chamadas : 0) || 0) + 1,
+      atualizadoEm: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    if (empSnap.exists) {
+      tx.update(empresaRef, { usoMes: mes, usoPct: percentualUso(novoCusto, limite) });
+    }
+  });
+}
+
 function buildSystemPrompt(empresaNome, notas, documentos, cadastro) {
   // Código e CNPJ vêm do cadastro da empresa, preenchido na criação. Quando estão aqui a IA
   // não precisa perguntar nem procurar no banco compartilhado.
@@ -1482,6 +1559,35 @@ exports.assistenteChat = onCall(
     const responsavel = (empresa.responsavelEmail || "").toLowerCase();
     if (!isAdmin && responsavel && responsavel !== userEmail) {
       throw new HttpsError("permission-denied", "Você não tem acesso a esta empresa.");
+    }
+
+    // Limite mensal de consumo da empresa: bate no custo estimado já gravado no mês. Passou do
+    // limite, a IA não responde mais até o admin aumentar o limite ou o mês virar. Usa
+    // "failed-precondition" (e não "resource-exhausted", que a tela trata como IA sem crédito).
+    {
+      const consumoSnap = await empresaRef0(empresaId).collection("consumo").doc(mesConsumo()).get();
+      const custoMes = consumoSnap.exists ? (consumoSnap.data().custoUsd || 0) : 0;
+      const limiteMes = limiteMensalEmpresa(empresa);
+      const [geralSnap, configSnap] = await Promise.all([
+        db.collection("assistenteIA_consumoGeral").doc(mesConsumo()).get(),
+        db.collection("assistenteIA_consumoGeral").doc("config").get(),
+      ]);
+      const custoGeral = geralSnap.exists ? (geralSnap.data().custoUsd || 0) : 0;
+      const limiteGeral = limiteGeralEscritorio(configSnap.exists ? configSnap.data() : null);
+      if (limiteAtingido(custoGeral, limiteGeral)) {
+        throw new HttpsError(
+          "failed-precondition",
+          "O limite de uso mensal da IA do escritório foi atingido. Fale com um administrador para liberar mais uso.",
+          { motivo: "limite_geral" }
+        );
+      }
+      if (limiteAtingido(custoMes, limiteMes)) {
+        throw new HttpsError(
+          "failed-precondition",
+          "O limite de uso mensal da IA para esta empresa foi atingido. Fale com um administrador para liberar mais uso.",
+          { motivo: "limite_empresa" }
+        );
+      }
     }
 
     // Trava de idempotência: se o navegador chamar de novo com o MESMO requestId (retry depois
@@ -1799,6 +1905,14 @@ exports.assistenteChat = onCall(
       totaisUso.gravado += u.cache_creation_input_tokens ?? 0;
       totaisUso.lido += u.cache_read_input_tokens ?? 0;
       totaisUso.saida += u.output_tokens ?? 0;
+      // Soma no consumo mensal da empresa a cada chamada (e não só no fim da mensagem), pra não
+      // perder o gasto se uma rodada seguinte falhar. Falha aqui nunca derruba a resposta.
+      const entradaCh = u.input_tokens ?? 0, lidoCh = u.cache_read_input_tokens ?? 0, saidaCh = u.output_tokens ?? 0;
+      const g5Ch = (g5 != null || g1 != null) ? (g5 ?? 0) : (ttl1hAtivo ? 0 : g);
+      const g1Ch = (g5 != null || g1 != null) ? (g1 ?? 0) : (ttl1hAtivo ? g : 0);
+      registrarConsumo(empresaId, custoEstimadoUsd({ entrada: entradaCh, lido: lidoCh, gravado5m: g5Ch, gravado1h: g1Ch, saida: saidaCh }),
+        { entrada: entradaCh, saida: saidaCh, lido: lidoCh, gravado: g })
+        .catch((e) => console.error("Não consegui registrar o consumo:", e));
       log(`tokens: entrada ${u.input_tokens ?? 0} | cache gravado ${u.cache_creation_input_tokens ?? 0} | cache lido ${u.cache_read_input_tokens ?? 0} | saída ${u.output_tokens ?? 0}`);
     };
 
@@ -2594,6 +2708,39 @@ const PADROES_SEED_DETALHADO = {
     "Padrões de lançamento (extrato) — parte 1:\n\"PJBANK / JACHELINE DAMASIO / CRICON\" -> Débito 434 / Crédito 7, código do histórico 7\n\"APLICACAO FINANCEIRA / APLICAÇÃO FINANCEIRA / APLIC FINANC\" -> Débito 20 / Crédito 7, código do histórico 80\n\"GT CLINICA / GT CLÍNICA\" -> Débito 7 / Crédito 13, código do histórico 1\n\"RESGATE APLICACAO FINANCEIRA / RESGATE APLICAÇÃO FINANCEIRA / RESG APLIC FINANC\" -> ignorar (não é lançamento contábil)\n\"PIX ENVIADO PARA FERNANDA FREITAS SIMON ALTHOFF\" -> Débito (vazio) / Crédito (vazio), histórico não fixo\n\"PIX ENVIADO PARA ANDRE ANTONIO ALTHOFF\" -> Débito (vazio) / Crédito (vazio), histórico não fixo"
   ]
 };
+
+// Só admin: define o limite mensal (US$) de uma empresa e já recalcula o percentual mostrado.
+exports.definirLimiteEmpresa = onCall({ cors: true }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "É preciso estar logado.");
+  if (!ehAdmin(request)) throw new HttpsError("permission-denied", "Só administradores podem alterar o limite.");
+  const { empresaId, limiteUsd } = request.data || {};
+  const limite = Number(limiteUsd);
+  if (!empresaId || typeof empresaId !== "string") throw new HttpsError("invalid-argument", "empresaId é obrigatório.");
+  if (!Number.isFinite(limite) || limite <= 0 || limite > 1000) {
+    throw new HttpsError("invalid-argument", "O limite precisa ser um valor em dólar maior que zero.");
+  }
+  const ref = db.collection("assistenteIA_empresas").doc(empresaId);
+  const empSnap = await ref.get();
+  if (!empSnap.exists) throw new HttpsError("not-found", "Empresa não encontrada.");
+  const mes = mesConsumo();
+  const conSnap = await ref.collection("consumo").doc(mes).get();
+  const custo = conSnap.exists ? (conSnap.data().custoUsd || 0) : 0;
+  await ref.update({ limiteMensalUsd: limite, usoMes: mes, usoPct: percentualUso(custo, limite) });
+  return { limiteUsd: limite, usoPct: percentualUso(custo, limite) };
+});
+
+// Só admin: define o teto mensal (US$) do escritório inteiro.
+exports.definirLimiteGeral = onCall({ cors: true }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "É preciso estar logado.");
+  if (!ehAdmin(request)) throw new HttpsError("permission-denied", "Só administradores podem alterar o limite.");
+  const limite = Number((request.data || {}).limiteUsd);
+  if (!Number.isFinite(limite) || limite <= 0 || limite > 100000) {
+    throw new HttpsError("invalid-argument", "O limite precisa ser um valor em dólar maior que zero.");
+  }
+  await db.collection("assistenteIA_consumoGeral").doc("config").set(
+    { limiteUsd: limite, atualizadoEm: FieldValue.serverTimestamp() }, { merge: true });
+  return { limiteUsd: limite };
+});
 
 exports.seedObservacoesEmpresas = onCall(
   { cors: true, timeoutSeconds: 120, memory: "256MiB" },

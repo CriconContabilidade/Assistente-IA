@@ -321,6 +321,26 @@
     display: flex; align-items: center; gap: 6px; transition: border-color .15s, color .15s;
   }
   .icon-btn:hover { border-color: var(--accent2); color: var(--text); }
+  /* consumo mensal da IA na empresa aberta (funcionário vê só o %; admin, também o valor) */
+  .uso-badge {
+    display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 10px;
+    border: 1px solid var(--panel-border); background: var(--panel); color: var(--text-dim);
+    font-size: 0.78rem; white-space: nowrap;
+  }
+  .uso-badge[hidden] { display: none; }
+  .uso-badge.admin { cursor: pointer; }
+  .uso-badge .uso-barra { width: 70px; height: 5px; border-radius: 3px; background: rgba(255,255,255,0.1); overflow: hidden; }
+  .uso-badge .uso-barra > div { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #7c3aed, #b794ff); }
+  .uso-badge.alerta { border-color: rgba(242,193,78,0.5); color: #f2c14e; }
+  .uso-badge.alerta .uso-barra > div { background: #f2c14e; }
+  .uso-badge.estourou { border-color: rgba(248,113,113,0.6); color: var(--danger); background: rgba(248,113,113,0.1); white-space: normal; max-width: 340px; line-height: 1.3; }
+  .uso-tabela { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+  .uso-tabela th { text-align: left; color: var(--text-faint); font-weight: 600; padding: 6px 6px; border-bottom: 1px solid var(--panel-border); }
+  .uso-tabela td { padding: 6px; border-bottom: 1px solid var(--panel-border); vertical-align: middle; }
+  .uso-tabela td.num, .uso-tabela th.num { text-align: right; }
+  .uso-tabela input { width: 70px; background: var(--panel); border: 1px solid var(--panel-border); color: var(--text); border-radius: 8px; padding: 4px 6px; font-size: 0.8rem; text-align: right; }
+  .uso-tabela .uso-pct.alerta { color: #f2c14e; }
+  .uso-tabela .uso-pct.estourou { color: var(--danger); font-weight: 700; }
 
   .chat-body { flex: 1; overflow-y: auto; padding: 26px; display: flex; flex-direction: column; gap: 16px; }
   .empty-state {
@@ -769,6 +789,7 @@
     <input type="text" class="search-box" id="empresaSearch" placeholder="🔍 Buscar empresa...">
     <button class="new-empresa-btn" id="newEmpresaBtn">+ Nova empresa</button>
     <button class="icon-btn" id="openCadastroBtn" style="width:100%; justify-content:center; margin-top:2px;">📇 Clientes e Fornecedores</button>
+    <button class="icon-btn" id="openUsoBtn" hidden style="width:100%; justify-content:center; margin-top:2px;">📊 Consumo da IA por empresa</button>
 
     <div class="empresa-list" id="empresaList"></div>
 
@@ -793,6 +814,7 @@
         <div class="sub" id="chatSub">Escolha uma empresa na lista ao lado pra começar</div>
       </div>
       <div class="header-actions">
+        <div class="uso-badge" id="usoBadge" hidden></div>
         <button class="icon-btn" id="openDocsBtn">📁 Histórico de documentos</button>
         <button class="icon-btn" id="openNotesBtn">🧠 O que a IA já sabe</button>
       </div>
@@ -939,6 +961,16 @@
   <div id="docsList" style="display:flex; flex-direction:column; gap:10px;"></div>
 </div>
 
+<div class="drawer-overlay" id="usoDrawerOverlay"></div>
+<div class="drawer wide" id="usoDrawer">
+  <button class="close-drawer" id="closeUsoDrawerBtn">✕</button>
+  <h3 id="usoTitle">Consumo da IA por empresa</h3>
+  <p class="hint">Custo estimado do mês corrente (a cobrança real é a da Anthropic). Quando a empresa chega ao limite dela, ou o escritório chega ao limite geral, a IA para de responder até você aumentar o limite aqui ou o mês virar. Os funcionários veem só o percentual.</p>
+  <div id="usoResumo" style="font-size:0.85rem; font-weight:600;"></div>
+  <div id="usoGeral" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:0.8rem; color:var(--text-dim);"></div>
+  <div id="usoLista"></div>
+</div>
+
 <div class="drawer-overlay" id="cadDrawerOverlay"></div>
 <div class="drawer wide" id="cadDrawer">
   <button class="close-drawer" id="closeCadDrawerBtn">✕</button>
@@ -996,7 +1028,7 @@
   import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, browserSessionPersistence, getIdTokenResult } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
   import {
     getFirestore, collection, doc, addDoc, setDoc, deleteDoc, updateDoc,
-    onSnapshot, query, orderBy, where, serverTimestamp, arrayUnion, getDocs
+    onSnapshot, query, orderBy, where, serverTimestamp, arrayUnion, getDocs, getDoc
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
   import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-functions.js";
 
@@ -1016,6 +1048,8 @@
   const db = getFirestore(app);
   const functionsClient = getFunctions(app);
   const assistenteChat = httpsCallable(functionsClient, 'assistenteChat', { timeout: 280000 });
+  const definirLimiteGeral = httpsCallable(functionsClient, 'definirLimiteGeral', { timeout: 60000 });
+  const definirLimiteEmpresa = httpsCallable(functionsClient, 'definirLimiteEmpresa', { timeout: 60000 });
 
   // ---------------- login ----------------
   const loginScreen = document.getElementById('loginScreen');
@@ -1171,6 +1205,7 @@
       const still = empresas.find(e => e.id === activeEmpresaId);
       if (still) renderNotes(still);
     }
+    atualizarUsoBadge();
     seedNotesFromHub();
   }
 
@@ -1195,6 +1230,7 @@
 
   function initEmpresas() {
     if (unsubEmpresas) unsubEmpresas();
+    document.getElementById('openUsoBtn').hidden = !isAdmin;
 
     if (isAdmin) {
       unsubEmpresas = onSnapshot(query(empresasCol, orderBy("nome")), async (snap) => {
@@ -1641,6 +1677,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     renderNotes(emp);
     renderMessagesForActive();
     ouvirFechamento();
+    atualizarUsoBadge();
   }
 
   // Mesma lista do backend, na ordem em que os relatórios costumam ser pedidos
@@ -2624,6 +2661,10 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     } catch (err) {
       hideTyping();
       console.error('Erro chamando a IA:', err);
+      if (err && err.code === 'functions/failed-precondition' && err.details && (err.details.motivo === 'limite_empresa' || err.details.motivo === 'limite_geral')) {
+        mostrarErroLocal(err.message);
+        return;
+      }
       if (err && err.code === 'functions/resource-exhausted') {
         setIaStatus(false, err.details && err.details.motivo);
         mostrarErroLocal(err.message);
@@ -2794,6 +2835,163 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         docsList.appendChild(item);
       });
     });
+  }
+
+  // ---------------- consumo mensal da IA por empresa ----------------
+  // Mesmas regras do backend (functions/index.js, limiteMensalEmpresa): o limite gravado na
+  // empresa vale; sem ele, US$ 0,30 pras empresas da lista e US$ 0,20 pras demais.
+  const EMPRESAS_LIMITE_ALTO = ['ferrara', 'gladius', 'mantovani', 'mantonvani', 'rainha', 'alexandre', 'servicos medicos', 'sindisaude'];
+  function limiteMensalEmpresa(emp) {
+    const gravado = Number(emp && emp.limiteMensalUsd);
+    if (Number.isFinite(gravado) && gravado > 0) return gravado;
+    const nome = String((emp && emp.nome) || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    return EMPRESAS_LIMITE_ALTO.some(n => nome.includes(n)) ? 0.3 : 0.2;
+  }
+  function mesConsumoAtual() {
+    const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit' }).formatToParts(new Date());
+    return `${p.find(x => x.type === 'year').value}-${p.find(x => x.type === 'month').value}`;
+  }
+  const fmtUsd = (v) => `US$ ${Number(v || 0).toFixed(2)}`;
+  const usoBadge = document.getElementById('usoBadge');
+  let unsubConsumoAtivo = null;
+  let consumoAtivo = null; // só admin: documento consumo/{mês} da empresa aberta
+  let empresaDoConsumoOuvido = null;
+
+  function pctDaEmpresa(emp) {
+    return emp && emp.usoMes === mesConsumoAtual() ? (emp.usoPct || 0) : 0;
+  }
+  function ouvirConsumoAtivo() {
+    if (unsubConsumoAtivo) { unsubConsumoAtivo(); unsubConsumoAtivo = null; }
+    consumoAtivo = null;
+    if (!isAdmin || !activeEmpresaId) return;
+    const id = activeEmpresaId;
+    unsubConsumoAtivo = onSnapshot(doc(db, 'assistenteIA_empresas', id, 'consumo', mesConsumoAtual()), snap => {
+      if (id !== activeEmpresaId) return;
+      consumoAtivo = snap.exists() ? snap.data() : null;
+      atualizarUsoBadge();
+    }, () => { /* sem permissão ou offline: fica só o percentual */ });
+  }
+  function atualizarUsoBadge() {
+    const emp = activeEmpresaId ? empresas.find(e => e.id === activeEmpresaId) : null;
+    if (!emp) { usoBadge.hidden = true; return; }
+    if (empresaDoConsumoOuvido !== activeEmpresaId) { empresaDoConsumoOuvido = activeEmpresaId; ouvirConsumoAtivo(); }
+    const pct = pctDaEmpresa(emp);
+    usoBadge.hidden = false;
+    usoBadge.classList.toggle('admin', !!isAdmin);
+    usoBadge.classList.toggle('alerta', pct >= 80 && pct < 100);
+    usoBadge.classList.toggle('estourou', pct >= 100);
+    const limite = limiteMensalEmpresa(emp);
+    const gasto = consumoAtivo ? consumoAtivo.custoUsd || 0 : 0;
+    usoBadge.title = isAdmin
+      ? `${fmtUsd(gasto)} de ${fmtUsd(limite)} neste mês — clique pra abrir o painel de consumo`
+      : 'Consumo da IA nesta empresa no mês';
+    if (pct >= 100) {
+      usoBadge.textContent = '⛔ O limite de uso da IA desta empresa atingiu o máximo neste mês. Fale com um administrador.';
+    } else {
+      usoBadge.innerHTML = `<span>⚡ Uso da IA no mês: <b>${pct}%</b></span><span class="uso-barra"><div style="width:${Math.min(pct, 100)}%"></div></span>`;
+    }
+  }
+  usoBadge.addEventListener('click', () => { if (isAdmin) abrirPainelUso(); });
+
+  // Painel geral — só admin. Lê o consumo do mês de cada empresa (documento só-admin).
+  const usoDrawer = document.getElementById('usoDrawer');
+  const usoDrawerOverlay = document.getElementById('usoDrawerOverlay');
+  const usoLista = document.getElementById('usoLista');
+  const usoResumo = document.getElementById('usoResumo');
+  const usoGeral = document.getElementById('usoGeral');
+  function fecharPainelUso() { usoDrawer.classList.remove('show'); usoDrawerOverlay.classList.remove('show'); }
+  document.getElementById('closeUsoDrawerBtn').addEventListener('click', fecharPainelUso);
+  usoDrawerOverlay.addEventListener('click', fecharPainelUso);
+  document.getElementById('openUsoBtn').addEventListener('click', () => abrirPainelUso());
+
+  async function abrirPainelUso() {
+    if (!isAdmin) return;
+    usoDrawer.classList.add('show');
+    usoDrawerOverlay.classList.add('show');
+    usoLista.innerHTML = '<div style="color:var(--text-faint); font-size:0.82rem;">Carregando...</div>';
+    usoResumo.textContent = '';
+    usoGeral.textContent = '';
+    const mes = mesConsumoAtual();
+    // Teto do escritório inteiro: total do mês x limite (padrão US$ 20, ajustável aqui)
+    let limiteGeral = 20, totalGeral = 0;
+    try {
+      const [gSnap, cSnap] = await Promise.all([
+        getDoc(doc(db, 'assistenteIA_consumoGeral', mes)),
+        getDoc(doc(db, 'assistenteIA_consumoGeral', 'config'))
+      ]);
+      if (gSnap.exists()) totalGeral = gSnap.data().custoUsd || 0;
+      if (cSnap.exists() && Number(cSnap.data().limiteUsd) > 0) limiteGeral = Number(cSnap.data().limiteUsd);
+    } catch (e) { console.warn('Consumo geral indisponível', e); }
+    const linhas = await Promise.all(empresas.map(async emp => {
+      let custo = 0, chamadas = 0;
+      try {
+        const snap = await getDoc(doc(db, 'assistenteIA_empresas', emp.id, 'consumo', mes));
+        if (snap.exists()) { custo = snap.data().custoUsd || 0; chamadas = snap.data().chamadas || 0; }
+      } catch (e) { console.warn('Consumo indisponível para', emp.nome, e); }
+      return { emp, custo, chamadas, limite: limiteMensalEmpresa(emp) };
+    }));
+    linhas.sort((a, b) => (b.custo / b.limite) - (a.custo / a.limite) || String(a.emp.nome).localeCompare(String(b.emp.nome), 'pt-BR'));
+    const total = linhas.reduce((t, l) => t + l.custo, 0);
+    const pctGeral = limiteGeral > 0 ? Math.round(100 * totalGeral / limiteGeral) : 0;
+    usoResumo.textContent = `Escritório em ${mes.slice(5)}/${mes.slice(0, 4)}: ${fmtUsd(totalGeral)} de ${fmtUsd(limiteGeral)} (${pctGeral}%)${pctGeral >= 100 ? ' — LIMITE GERAL ATINGIDO, a IA está parada pra todas as empresas' : ''}`;
+    usoResumo.style.color = pctGeral >= 100 ? 'var(--danger)' : pctGeral >= 80 ? '#f2c14e' : '';
+    usoGeral.innerHTML = '';
+    const rotuloGeral = document.createElement('span'); rotuloGeral.textContent = `Limite geral do mês (US$) — soma das empresas hoje: ${fmtUsd(total)}`;
+    const inpGeral = document.createElement('input'); inpGeral.type = 'number'; inpGeral.min = '1'; inpGeral.step = '1'; inpGeral.value = limiteGeral.toFixed(2);
+    inpGeral.style.cssText = 'width:80px; background:var(--panel); border:1px solid var(--panel-border); color:var(--text); border-radius:8px; padding:4px 6px; text-align:right;';
+    const btnGeral = document.createElement('button'); btnGeral.className = 'icon-btn'; btnGeral.textContent = 'Salvar'; btnGeral.style.padding = '4px 8px';
+    btnGeral.addEventListener('click', async () => {
+      const v = Number(String(inpGeral.value).replace(',', '.'));
+      if (!(v > 0)) { alert('Informe um limite em dólar maior que zero.'); return; }
+      btnGeral.disabled = true; btnGeral.textContent = '...';
+      try { await definirLimiteGeral({ limiteUsd: v }); btnGeral.textContent = '✓'; abrirPainelUso(); }
+      catch (err) { console.error(err); alert(`Não consegui salvar o limite geral: ${(err && err.message) || 'erro desconhecido'}`); btnGeral.textContent = 'Salvar'; btnGeral.disabled = false; }
+    });
+    usoGeral.append(rotuloGeral, inpGeral, btnGeral);
+    const tabela = document.createElement('table');
+    tabela.className = 'uso-tabela';
+    tabela.innerHTML = '<thead><tr><th>Empresa</th><th class="num">Gasto</th><th class="num">Limite (US$)</th><th class="num">Uso</th><th></th></tr></thead>';
+    const corpo = document.createElement('tbody');
+    const classePct = (n) => 'num uso-pct' + (n >= 100 ? ' estourou' : n >= 80 ? ' alerta' : '');
+    linhas.forEach(l => {
+      const pct = l.limite > 0 ? Math.round(100 * l.custo / l.limite) : 0;
+      const tr = document.createElement('tr');
+      const tdNome = document.createElement('td'); tdNome.textContent = l.emp.nome || '';
+      const tdGasto = document.createElement('td'); tdGasto.className = 'num'; tdGasto.textContent = fmtUsd(l.custo);
+      tdGasto.title = `${l.chamadas} chamada(s) à IA no mês`;
+      const tdLim = document.createElement('td'); tdLim.className = 'num';
+      const inp = document.createElement('input'); inp.type = 'number'; inp.min = '0.1'; inp.step = '0.1'; inp.value = l.limite.toFixed(2);
+      tdLim.appendChild(inp);
+      const tdPct = document.createElement('td'); tdPct.className = classePct(pct); tdPct.textContent = `${pct}%`;
+      const tdSalvar = document.createElement('td');
+      const btn = document.createElement('button'); btn.className = 'icon-btn'; btn.textContent = 'Salvar'; btn.style.padding = '4px 8px';
+      btn.addEventListener('click', async () => {
+        const v = Number(String(inp.value).replace(',', '.'));
+        if (!(v > 0)) { alert('Informe um limite em dólar maior que zero.'); return; }
+        btn.disabled = true; btn.textContent = '...';
+        try {
+          const r = await definirLimiteEmpresa({ empresaId: l.emp.id, limiteUsd: v });
+          l.limite = v;
+          const novoPct = r.data && Number.isFinite(r.data.usoPct) ? r.data.usoPct : Math.round(100 * l.custo / v);
+          tdPct.textContent = `${novoPct}%`;
+          tdPct.className = classePct(novoPct);
+          btn.textContent = '✓';
+        } catch (err) {
+          console.error('Erro salvando limite', err);
+          alert(`Não consegui salvar o limite: ${(err && err.message) || 'erro desconhecido'}`);
+          btn.textContent = 'Salvar';
+        } finally {
+          btn.disabled = false;
+          setTimeout(() => { btn.textContent = 'Salvar'; }, 1500);
+        }
+      });
+      tdSalvar.appendChild(btn);
+      tr.append(tdNome, tdGasto, tdLim, tdPct, tdSalvar);
+      corpo.appendChild(tr);
+    });
+    tabela.appendChild(corpo);
+    usoLista.innerHTML = '';
+    usoLista.appendChild(tabela);
   }
 
   function renderNotes(emp) {
