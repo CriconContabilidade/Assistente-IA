@@ -27,7 +27,7 @@ function colRef(c) {
   };
   return { ...q, doc: (id) => docRef(`${c}/${id || 'auto' + (++seq)}`), async add(dados) { const r = docRef(`${c}/auto${++seq}`); await r.set(dados); return r; } };
 }
-const fakeDb = { collection: (n) => colRef(n) };
+const fakeDb = { collection: (n) => colRef(n), async runTransaction(fn) { const tx = { async get(ref) { return ref.get(); }, set(ref, d, o) { return ref.set(d, o); }, update(ref, d) { return ref.set(d, { merge: true }); } }; return fn(tx); } };
 
 let roteiro = [];
 class FakeAnthropic {

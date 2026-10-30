@@ -38,6 +38,7 @@ const fakeDb = {
     const tx = {
       async get(ref) { return ref.get(); },
       set(ref, dados, opts) { banco.set(ref.path, opts && opts.merge ? { ...(banco.get(ref.path) || {}), ...dados } : dados); },
+      update(ref, dados) { banco.set(ref.path, { ...(banco.get(ref.path) || {}), ...dados }); },
     };
     return fn(tx);
   },

@@ -46,7 +46,19 @@ function colRef(caminho) {
     async add(dados) { const r = docRef(`${caminho}/auto${++seq}`); await r.set(dados); return r; },
   };
 }
-const fakeDb = { collection: (n) => colRef(n) };
+let falhasTransacao = 0; // quantas transações (consumo) devem falhar antes de funcionar
+const fakeDb = {
+  collection: (n) => colRef(n),
+  async runTransaction(fn) {
+    if (falhasTransacao > 0) { falhasTransacao--; throw new Error('transação falhou (simulado)'); }
+    const tx = {
+      async get(ref) { return ref.get(); },
+      set(ref, dados, opts) { banco.set(ref.path, opts && opts.merge ? aplicarMerge(banco.get(ref.path), dados) : aplicarMerge({}, dados)); },
+      update(ref, dados) { banco.set(ref.path, aplicarMerge(banco.get(ref.path), dados)); },
+    };
+    return fn(tx);
+  },
+};
 
 // ---------- Anthropic roteirizado ----------
 let roteiro = [];
@@ -705,6 +717,26 @@ const pedidoComArquivos = (message, files) => handler({
   confere('prints antigos não roubam as 6 vagas completas: os relatórios mantêm 1500 chars', qtdR >= 6 * 1500 - 200, String(qtdR));
   confere('prints antigos ficam só com o resumo curto', (promptIdx.match(/I/g) || []).length < 5 * 400);
   confere('resumo parcial vem com aviso pra reabrir o arquivo', promptIdx.includes('curto.pdf (resumo curto'));
+
+  console.log('\n10l) consumo: o gasto é gravado ANTES de responder, com nova tentativa se a 1ª falhar');
+  prepararEmpresa();
+  falhasTransacao = 1;
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('oi');
+  const mesCons = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).slice(0, 7);
+  const consEmp = banco.get(`assistenteIA_empresas/mv/consumo/${mesCons}`);
+  const consGeral = banco.get(`assistenteIA_consumoGeral/${mesCons}`);
+  confere('consumo da empresa já está gravado quando a resposta volta (mesmo com a 1ª tentativa falhando)', consEmp && consEmp.chamadas === 1 && consEmp.custoUsd > 0, JSON.stringify(consEmp));
+  confere('consumo geral do escritório também', consGeral && consGeral.chamadas === 1 && consGeral.custoUsd > 0, JSON.stringify(consGeral));
+  confere('percentual de uso fica na empresa', typeof banco.get('assistenteIA_empresas/mv').usoPct === 'number');
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('atualizar_fechamento', { competencia: '08/2026', pendencias: 1 })], 'tool_use'),
+    resp([txt('feito')], 'end_turn'),
+  ];
+  await pedido('duas rodadas');
+  const cons2 = banco.get(`assistenteIA_empresas/mv/consumo/${mesCons}`);
+  confere('duas chamadas à IA = duas parcelas somadas, nenhuma perdida', cons2 && cons2.chamadas === 2, JSON.stringify(cons2));
 
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();

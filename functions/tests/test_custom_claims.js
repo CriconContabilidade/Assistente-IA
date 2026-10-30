@@ -14,7 +14,12 @@ const authFalso = {
   async setCustomUserClaims(uid, claims) {
     for (const [email, u] of usuariosAuth) if (u.uid === uid) u.customClaims = claims;
   },
+  async listUsers() {
+    return { users: [...usuariosAuth].map(([email, u]) => ({ uid: u.uid, email, customClaims: u.customClaims })), pageToken: undefined };
+  },
+  async revokeRefreshTokens(uid) { revogados.push(uid); },
 };
+const revogados = [];
 
 class HttpsError extends Error { constructor(c, m) { super(m); this.code = c; } }
 const falsos = {
@@ -61,6 +66,16 @@ function confere(nome, ok, detalhe = '') { if (!ok) falhas++; console.log(`${ok 
   console.log('\n4) admin SÓ por claim (sem estar na lista de e-mail) também é aceito — a troca funciona no sentido oposto');
   const semLista = await sincronizarClaimsAdmin({ auth: { token: { email: 'nao-esta-na-lista@cricon.com.br', admin: true } } });
   confere('claim sozinho basta pra rodar a function admin-only', Array.isArray(semLista.resultado));
+
+  console.log('\n5) quem saiu da lista de admins perde o claim (e os outros claims ficam)');
+  usuariosAuth.set('ex-admin@cricon.com.br', { uid: 'uid-9', customClaims: { admin: true, outra: 'x' } });
+  usuariosAuth.set('funcionario@cricon.com.br', { uid: 'uid-10', customClaims: { outra: 'y' } });
+  const r3 = await sincronizarClaimsAdmin({ auth: { token: { email: 'contabilidadecricon@gmail.com' } } });
+  confere('ex-admin perdeu o claim admin', usuariosAuth.get('ex-admin@cricon.com.br').customClaims.admin === undefined, JSON.stringify(usuariosAuth.get('ex-admin@cricon.com.br').customClaims));
+  confere('outros claims do ex-admin continuam', usuariosAuth.get('ex-admin@cricon.com.br').customClaims.outra === 'x');
+  confere('sessões do ex-admin foram revogadas', revogados.includes('uid-9') && !revogados.includes('uid-10'), JSON.stringify(revogados));
+  confere('o resultado diz quem foi removido', r3.resultado.some((x) => x.email === 'ex-admin@cricon.com.br' && /REMOVIDO/.test(x.status)));
+  confere('admins da lista mantêm o claim', usuariosAuth.get('contabilidadecricon@gmail.com').customClaims.admin === true && usuariosAuth.get('guilherme.primetherapy@gmail.com').customClaims.admin === true);
 
   console.log(falhas === 0 ? '\nTUDO OK' : `\n${falhas} FALHA(S)`);
   process.exit(falhas === 0 ? 0 : 1);

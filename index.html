@@ -1627,11 +1627,18 @@
 Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perguntar que informo o caminho certinho, com print de tela.`;
   }
 
+  // Saudação de empresa recém-criada: só na tela. As regras do Firestore só deixam o navegador gravar
+  // mensagem de usuário; gravar a saudação como "assistant" era recusado, e a empresa ficava criada
+  // sem ser selecionada.
+  let empresaRecemCriada = null;
+
   document.getElementById('newEmpresaBtn').addEventListener('click', async () => {
     const dados = await showPrompt({ title: "Nova empresa", placeholder: "Nome da empresa", extras: true });
     if (!dados || !dados.nome || !dados.nome.trim()) return;
     const nome = dados.nome;
-    const docRef = await addDoc(empresasCol, {
+    let docRef;
+    try {
+    docRef = await addDoc(empresasCol, {
       nome: nome.trim(),
       // guardados já no cadastro: são os dados que a IA precisa pra montar os arquivos, e
       // buscá-los pelo nome no banco compartilhado falha quando o nome não bate exatamente
@@ -1643,9 +1650,12 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       responsavelEmail: "",
       criadoEm: serverTimestamp(),
     });
-    await addDoc(collection(db, "assistenteIA_empresas", docRef.id, "mensagens"), {
-      role: 'assistant', text: welcomeMessage(nome.trim()), files: [], criadoEm: serverTimestamp()
-    });
+    } catch (err) {
+      console.error('Erro criando a empresa:', err);
+      alert('Não consegui criar a empresa. Tente de novo; se continuar, avise o administrador.');
+      return;
+    }
+    empresaRecemCriada = { id: docRef.id, nome: nome.trim() };
     selectEmpresa(docRef.id);
   });
 
@@ -1780,12 +1790,16 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     unsubMessages = onSnapshot(query(msgsCol, orderBy("criadoEm")), snap => {
       chatBody.innerHTML = "";
       currentMessages = snap.docs.map(d => d.data());
-      if (snap.empty && !typingActive) {
+      const saudacao = empresaRecemCriada && empresaRecemCriada.id === activeEmpresaId
+        ? { role: 'assistant', text: welcomeMessage(empresaRecemCriada.nome), files: [] }
+        : null;
+      if (snap.empty && !typingActive && !saudacao) {
         const es = document.createElement('div');
         es.className = 'empty-state';
         es.innerHTML = `<img class="orb-lg contorno-logo" src="assets/logo-simbolo-claro.png" alt="Stagiario"><h4>Comece a conversa</h4><p>Anexe um relatório desta empresa ou escreva o que precisa — a IA lê o arquivo de verdade e responde com base no que já sabe sobre ela.</p>`;
         chatBody.appendChild(es);
       } else {
+        if (saudacao) chatBody.appendChild(renderMsg(saudacao));
         snap.forEach(d => chatBody.appendChild(renderMsg(d.data())));
       }
       // O snapshot do Firestore reconstrói o chat inteiro a cada atualização — se o

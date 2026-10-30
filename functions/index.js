@@ -1329,6 +1329,21 @@ async function registrarConsumo(empresaId, custoUsd, tokens) {
   });
 }
 
+// Registra o consumo com uma nova tentativa e nunca rejeita (falha aqui não pode derrubar a
+// resposta). Quem chama guarda a promessa e o handler espera todas antes de responder: numa Cloud
+// Function, trabalho solto depois da resposta pode ser cortado e o gasto ficaria sem registro.
+async function registrarConsumoSeguro(empresaId, custoUsd, tokens) {
+  for (let tentativa = 1; tentativa <= 2; tentativa++) {
+    try {
+      await registrarConsumo(empresaId, custoUsd, tokens);
+      return;
+    } catch (e) {
+      if (tentativa === 2) console.error("Não consegui registrar o consumo:", e);
+      else await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+}
+
 function buildSystemPrompt(empresaNome, notas, documentos, cadastro) {
   // Código e CNPJ vêm do cadastro da empresa, preenchido na criação. Quando estão aqui a IA
   // não precisa perguntar nem procurar no banco compartilhado.
@@ -1643,6 +1658,7 @@ exports.assistenteChat = onCall(
       meuAttemptId = reserva.attemptId;
     }
 
+    const pendentesConsumo = [];
     async function processarPedido() {
 
     // Histórico de relatórios já processados — vira contexto permanente da IA, independente
@@ -1910,9 +1926,8 @@ exports.assistenteChat = onCall(
       const entradaCh = u.input_tokens ?? 0, lidoCh = u.cache_read_input_tokens ?? 0, saidaCh = u.output_tokens ?? 0;
       const g5Ch = (g5 != null || g1 != null) ? (g5 ?? 0) : (ttl1hAtivo ? 0 : g);
       const g1Ch = (g5 != null || g1 != null) ? (g1 ?? 0) : (ttl1hAtivo ? g : 0);
-      registrarConsumo(empresaId, custoEstimadoUsd({ entrada: entradaCh, lido: lidoCh, gravado5m: g5Ch, gravado1h: g1Ch, saida: saidaCh }),
-        { entrada: entradaCh, saida: saidaCh, lido: lidoCh, gravado: g })
-        .catch((e) => console.error("Não consegui registrar o consumo:", e));
+      pendentesConsumo.push(registrarConsumoSeguro(empresaId, custoEstimadoUsd({ entrada: entradaCh, lido: lidoCh, gravado5m: g5Ch, gravado1h: g1Ch, saida: saidaCh }),
+        { entrada: entradaCh, saida: saidaCh, lido: lidoCh, gravado: g }));
       log(`tokens: entrada ${u.input_tokens ?? 0} | cache gravado ${u.cache_creation_input_tokens ?? 0} | cache lido ${u.cache_read_input_tokens ?? 0} | saída ${u.output_tokens ?? 0}`);
     };
 
@@ -2552,7 +2567,14 @@ exports.assistenteChat = onCall(
     }
 
     try {
-      const resultado = await processarPedido();
+      let resultado;
+      try {
+        resultado = await processarPedido();
+      } finally {
+        // o gasto de cada chamada à IA só vale se foi gravado: espera antes de responder (também
+        // quando a mensagem falhou no meio, porque as rodadas anteriores já custaram)
+        await Promise.allSettled(pendentesConsumo);
+      }
       await gravarSeAindaSouDono({
         status: "completed",
         text: resultado.text,
@@ -2799,6 +2821,26 @@ exports.sincronizarClaimsAdmin = onCall(
 
     const auth = getAdminAuth();
     const resultado = [];
+    // Quem saiu da lista perde o claim. A lista é a fonte da verdade: só adicionar deixava o
+    // acesso de um ex-admin valendo pra sempre.
+    const emailsAdmin = new Set(ADMIN_EMAILS.map((e) => String(e).toLowerCase()));
+    let pagina;
+    do {
+      const lote = await auth.listUsers(1000, pagina);
+      for (const u of lote.users) {
+        if (!(u.customClaims && u.customClaims.admin === true)) continue;
+        if (emailsAdmin.has(String(u.email || "").toLowerCase())) continue;
+        try {
+          const { admin: _removido, ...resto } = u.customClaims;
+          await auth.setCustomUserClaims(u.uid, resto);
+          await auth.revokeRefreshTokens(u.uid);
+          resultado.push({ email: u.email || u.uid, status: "claim REMOVIDO (não está mais na lista)" });
+        } catch (err) {
+          resultado.push({ email: u.email || u.uid, status: `não consegui remover o claim: ${err.message}` });
+        }
+      }
+      pagina = lote.pageToken;
+    } while (pagina);
     for (const email of ADMIN_EMAILS) {
       try {
         const user = await auth.getUserByEmail(email);
@@ -2816,7 +2858,7 @@ exports.sincronizarClaimsAdmin = onCall(
     }
     return {
       resultado,
-      aviso: "Quem recebeu o claim agora precisa fazer logout e login de novo (ou dar um F5 depois de uns segundos) pra ele aparecer no token — custom claim só entra no token na próxima vez que ele é emitido.",
+      aviso: "Quem recebeu o claim agora precisa fazer logout e login de novo (ou dar um F5 depois de uns segundos) pra ele aparecer no token — custom claim só entra no token na próxima vez que ele é emitido. Quem perdeu o claim deixa de ser admin quando o token atual expirar (até 1 hora) ou no próximo login; as regras do Firestore ainda têm a lista de e-mails própria, que também precisa ser atualizada.",
     };
   }
 );
