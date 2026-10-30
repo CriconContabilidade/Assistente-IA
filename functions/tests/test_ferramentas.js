@@ -86,6 +86,7 @@ const falsos = {
   'firebase-functions/v2/https': { onCall: (opts, fn) => fn, HttpsError },
   'firebase-functions/params': { defineSecret: () => ({ value: () => 'chave-falsa' }) },
   'firebase-admin/app': { initializeApp() {} },
+  'firebase-admin/auth': { getAuth: () => ({}) },
   'firebase-admin/firestore': {
     getFirestore: () => fakeDb,
     FieldValue: { serverTimestamp: () => 'TS', arrayUnion: (...x) => ({ __union: x }) },

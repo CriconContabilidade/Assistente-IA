@@ -27,6 +27,7 @@ const falsos = {
   'firebase-functions/v2/https': { onCall: (o, f) => f, HttpsError },
   'firebase-functions/params': { defineSecret: () => ({ value: () => 'x' }) },
   'firebase-admin/app': { initializeApp() {} },
+  'firebase-admin/auth': { getAuth: () => ({}) },
   'firebase-admin/firestore': { getFirestore: () => fakeDb, FieldValue: { serverTimestamp: () => 'T', arrayUnion: (...x) => ({ __union: x }) } },
   '@anthropic-ai/sdk': FakeAnthropic,
   exceljs: {},
