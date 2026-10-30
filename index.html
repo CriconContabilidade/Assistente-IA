@@ -1121,7 +1121,7 @@
       }
       isAdmin = temClaimAdmin || isAdminEmail(user.email);
       window.stagiarioIsAdmin = isAdmin;
-      if (window.cadRenderResults) window.cadRenderResults();
+      try { if (window.cadRenderResults) window.cadRenderResults(); } catch (err) { console.warn('Cadastro compartilhado indisponível:', err); }
       sincronizarClaimsSeNecessario();
       migrarPadroesSeNecessario();
       userEmail.replaceChildren(document.createTextNode(user.email || ''));
@@ -3177,7 +3177,10 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
 <script>
-pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+// As bibliotecas de PDF vêm de um CDN: se ele não carregar (rede, DNS, bloqueador), o app continua
+// funcionando, só sem as miniaturas e a análise de páginas. Antes este erro abortava o script
+// inteiro, o cadastro ficava sem inicializar e a lista de empresas nem aparecia.
+if (typeof pdfjsLib !== 'undefined') pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 
 function cadOnlyDigits(s) { return (s || "").toString().replace(/\D/g, ""); }
 function cadNormalizeText(s) { return (s || "").toString().normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().trim(); }
@@ -3367,6 +3370,7 @@ async function cadExcluirRegistro(documento) {
   }
 }
 function cadRenderResults() {
+  if (!window.cadClientesDB || !window.cadEmpresasDB) return;
   const searchBox = document.getElementById('cadSearchBox');
   const q = cadNormalizeText(searchBox.value);
   const qDigits = cadOnlyDigits(searchBox.value);
