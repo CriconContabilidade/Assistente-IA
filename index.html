@@ -3174,13 +3174,14 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
      "conversoes-cibele") usado pela Baixas de Parcelas e pelo Cadastro de Clientes e
      Fornecedores — trazido pra dentro do Stagiario pra não precisar abrir outra ferramenta.
      Mesmo parser/UI daquela ferramenta, só trocando a casca visual pro tema do Stagiario. ---------------- -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="vendor/pdf.min.js"></script>
+<script src="vendor/pdf-lib.min.js"></script>
 <script>
-// As bibliotecas de PDF vêm de um CDN: se ele não carregar (rede, DNS, bloqueador), o app continua
+// As bibliotecas de PDF ficam na pasta vendor/ do próprio site (o CDN não resolve em algumas redes do
+// escritório). Se mesmo assim não carregarem, o app continua
 // funcionando, só sem as miniaturas e a análise de páginas. Antes este erro abortava o script
 // inteiro, o cadastro ficava sem inicializar e a lista de empresas nem aparecia.
-if (typeof pdfjsLib !== 'undefined') pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+if (typeof pdfjsLib !== 'undefined') pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
 
 function cadOnlyDigits(s) { return (s || "").toString().replace(/\D/g, ""); }
 function cadNormalizeText(s) { return (s || "").toString().normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase().trim(); }

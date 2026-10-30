@@ -1,0 +1,4 @@
+Bibliotecas de terceiros copiadas para o app abrir mesmo quando o CDN (cdnjs.cloudflare.com) nao resolve na rede do escritorio.
+- pdf.js 3.11.174 (Apache-2.0): pdf.min.js e pdf.worker.min.js
+- pdf-lib 1.17.1 (MIT): pdf-lib.min.js
+Origem: pacotes oficiais pdfjs-dist@3.11.174 e pdf-lib@1.17.1 do npm (mesmas versoes que o app carregava do CDN).
