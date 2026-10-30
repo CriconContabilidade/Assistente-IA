@@ -2751,6 +2751,33 @@ exports.definirLimiteEmpresa = onCall({ cors: true }, async (request) => {
   return { limiteUsd: limite, usoPct: percentualUso(custo, limite) };
 });
 
+// Só admin: exclui a empresa e TUDO o que ela tem (mensagens, relatórios guardados, fechamentos,
+// estado, consumo, senhas de PDF). O navegador sozinho não consegue: as regras do Firestore não
+// deixam apagar as subcoleções, e apagar só o documento da empresa deixaria relatórios e senhas
+// órfãos no banco. Exige o nome da empresa digitado e confere aqui. O cadastro compartilhado de
+// clientes e fornecedores (outro projeto) e o total de consumo do escritório não são tocados.
+exports.excluirEmpresa = onCall({ cors: true, timeoutSeconds: 300 }, async (request) => {
+  if (!request.auth) throw new HttpsError("unauthenticated", "É preciso estar logado.");
+  if (!ehAdmin(request)) throw new HttpsError("permission-denied", "Só administradores podem excluir uma empresa.");
+  const { empresaId, confirmacaoNome } = request.data || {};
+  if (typeof empresaId !== "string" || !/^[A-Za-z0-9_-]{1,100}$/.test(empresaId)) {
+    throw new HttpsError("invalid-argument", "empresaId inválido.");
+  }
+  const ref = db.collection("assistenteIA_empresas").doc(empresaId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError("not-found", "Empresa não encontrada.");
+  const nome = String(snap.data().nome || "").trim();
+  // empresa sem nome (cadastro quebrado): a confirmação é a palavra EXCLUIR
+  const esperado = nome || "EXCLUIR";
+  if (semAcento(String(confirmacaoNome || "").trim()) !== semAcento(esperado)) {
+    throw new HttpsError("invalid-argument", "O nome digitado não confere com o da empresa.");
+  }
+  await db.recursiveDelete(ref);
+  const quem = (request.auth.token && request.auth.token.email) || request.auth.uid;
+  console.log(`empresa excluída: ${empresaId} ("${nome}") por ${quem}`);
+  return { ok: true };
+});
+
 // Só admin: define o teto mensal (US$) do escritório inteiro.
 exports.definirLimiteGeral = onCall({ cors: true }, async (request) => {
   if (!request.auth) throw new HttpsError("unauthenticated", "É preciso estar logado.");

@@ -888,6 +888,21 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="empDelOverlay">
+  <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="empDelTitle">
+    <h3 id="empDelTitle">Excluir a empresa?</h3>
+    <div id="empDelInfo" style="font-size:0.88rem;font-weight:600;margin-bottom:10px;word-break:break-word;"></div>
+    <div class="modal-dica">Apaga a empresa e TUDO dela: conversa, relatórios guardados, fechamentos, observações e senhas de PDF. Não dá para desfazer. O cadastro compartilhado de clientes e fornecedores não é afetado.</div>
+    <div id="empDelPedido" style="font-size:0.8rem;margin-top:10px;"></div>
+    <input type="text" id="empDelCampo" autocomplete="off" placeholder="Digite o nome da empresa">
+    <div id="empDelErro" class="modal-dica" style="color:var(--danger);" hidden></div>
+    <div class="modal-actions">
+      <button class="modal-btn-cancel" id="empDelCancel" type="button">Cancelar</button>
+      <button class="modal-btn-danger" id="empDelConfirm" type="button" disabled>Excluir empresa</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="cadDelOverlay">
   <div class="modal-card" role="alertdialog" aria-modal="true" aria-labelledby="cadDelTitle">
     <h3 id="cadDelTitle">Excluir do cadastro compartilhado?</h3>
@@ -1050,6 +1065,7 @@
   const assistenteChat = httpsCallable(functionsClient, 'assistenteChat', { timeout: 280000 });
   const definirLimiteGeral = httpsCallable(functionsClient, 'definirLimiteGeral', { timeout: 60000 });
   const definirLimiteEmpresa = httpsCallable(functionsClient, 'definirLimiteEmpresa', { timeout: 60000 });
+  const excluirEmpresa = httpsCallable(functionsClient, 'excluirEmpresa', { timeout: 300000 });
 
   // ---------------- login ----------------
   const loginScreen = document.getElementById('loginScreen');
@@ -1598,6 +1614,14 @@
         // (achado do Antigravity: antes era sempre o mesmo ícone, sem feedback visual nenhum).
         effort.textContent = '⚡'.repeat(ESFORCO_ORDEM.indexOf(nivelAtual) + 1);
         item.appendChild(effort);
+
+        const del = document.createElement('button');
+        del.className = 'assign-btn del-btn';
+        del.type = 'button';
+        del.title = 'Excluir esta empresa';
+        del.textContent = '🗑';
+        del.addEventListener('click', (e) => { e.stopPropagation(); confirmarExclusaoEmpresa(emp); });
+        item.appendChild(del);
       }
       item.querySelector('.assign-btn')?.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1613,6 +1637,73 @@
   }
 
   empresaSearch.addEventListener('input', () => renderEmpresaList(empresaSearch.value));
+
+  // Excluir empresa (só admin): pede o nome digitado; a function apaga a empresa e tudo dentro dela.
+  const normalizarNome = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+  function pedirConfirmacaoExclusao(emp) {
+    const overlay = document.getElementById('empDelOverlay');
+    const campo = document.getElementById('empDelCampo');
+    const cancelar = document.getElementById('empDelCancel');
+    const confirmar = document.getElementById('empDelConfirm');
+    const erro = document.getElementById('empDelErro');
+    const esperado = String(emp.nome || '').trim() || 'EXCLUIR';
+    document.getElementById('empDelInfo').textContent = String(emp.nome || 'Empresa sem nome');
+    document.getElementById('empDelPedido').textContent = `Para confirmar, digite: ${esperado}`;
+    campo.value = '';
+    erro.hidden = true;
+    confirmar.disabled = true;
+    confirmar.textContent = 'Excluir empresa';
+    return new Promise((resolve) => {
+      function fechar(r) {
+        overlay.classList.remove('show');
+        overlay.removeEventListener('keydown', onKey);
+        overlay.removeEventListener('click', onFundo);
+        campo.removeEventListener('input', onInput);
+        cancelar.removeEventListener('click', onCancelar);
+        confirmar.removeEventListener('click', onConfirmar);
+        resolve(r);
+      }
+      function onInput() { confirmar.disabled = normalizarNome(campo.value) !== normalizarNome(esperado); }
+      function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); fechar(null); }
+        else if (e.key === 'Enter' && e.target === campo && !confirmar.disabled) { e.preventDefault(); onConfirmar(); }
+      }
+      function onFundo(e) { if (e.target === overlay) fechar(null); }
+      function onCancelar() { fechar(null); }
+      function onConfirmar() { if (!confirmar.disabled) fechar(campo.value); }
+      overlay.addEventListener('keydown', onKey);
+      overlay.addEventListener('click', onFundo);
+      campo.addEventListener('input', onInput);
+      cancelar.addEventListener('click', onCancelar);
+      confirmar.addEventListener('click', onConfirmar);
+      overlay.classList.add('show');
+      setTimeout(() => campo.focus(), 0);
+    });
+  }
+  async function confirmarExclusaoEmpresa(emp) {
+    if (!isAdmin) return;
+    const digitado = await pedirConfirmacaoExclusao(emp);
+    if (digitado === null) return;
+    const estavaAberta = emp.id === activeEmpresaId;
+    try {
+      await excluirEmpresa({ empresaId: emp.id, confirmacaoNome: digitado });
+    } catch (err) {
+      console.error('Erro excluindo a empresa:', err);
+      alert(`Não consegui excluir a empresa: ${(err && err.message) || 'erro desconhecido'}`);
+      return;
+    }
+    if (estavaAberta) {
+      activeEmpresaId = null;
+      if (unsubMessages) { unsubMessages(); unsubMessages = null; }
+      chatTitle.textContent = 'Selecione uma empresa';
+      chatSub.textContent = 'Escolha uma empresa na lista ao lado pra começar';
+      messageInput.disabled = true;
+      sendBtn.disabled = true;
+      pendingFiles = [];
+      renderAttachPreview();
+      renderMessagesForActive();
+    }
+  }
 
   function welcomeMessage(nome) {
     return `Olá, vamos configurar a empresa ${nome}? Para começar, você poderia me enviar esses relatórios abaixo:
