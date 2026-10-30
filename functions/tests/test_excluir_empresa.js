@@ -5,14 +5,16 @@ const ARQ = require('path').join(__dirname, '..', 'index.js');
 
 const empresas = new Map(); // id -> dados
 const apagadas = [];
+let marcadaAntes = null;
 const fakeDb = {
   collection: (nome) => ({
     doc: (id) => ({
       id, path: `${nome}/${id}`,
       async get() { const d = empresas.get(id); return { exists: d !== undefined, data: () => d }; },
+      async update(dados) { empresas.set(id, { ...empresas.get(id), ...dados }); },
     }),
   }),
-  async recursiveDelete(ref) { apagadas.push(ref.path); empresas.delete(ref.id); },
+  async recursiveDelete(ref) { marcadaAntes = empresas.get(ref.id) && empresas.get(ref.id).excluindo === true; apagadas.push(ref.path); empresas.delete(ref.id); },
 };
 
 class HttpsError extends Error { constructor(c, m) { super(m); this.code = c; } }
@@ -56,6 +58,8 @@ const chama = async (auth, data) => { try { return { r: await excluirEmpresa({ a
 
   x = await chama(ADMIN, { empresaId: 'emp1', confirmacaoNome: '  MANTOVANI ltda ' });
   confere('nome certo (sem diferenciar maiúscula/espaços) apaga a empresa com recursiveDelete', x.r && x.r.ok === true && apagadas.join() === 'assistenteIA_empresas/emp1' && !empresas.has('emp1'), JSON.stringify(x));
+
+  confere('a empresa é marcada como "excluindo" ANTES de apagar (bloqueia pedidos e gravações em andamento)', marcadaAntes === true);
 
   x = await chama(ADMIN, { empresaId: 'emp2', confirmacaoNome: 'qualquer coisa' });
   confere('empresa sem nome: só a palavra EXCLUIR confirma', x.erro && x.erro.code === 'invalid-argument' && empresas.has('emp2'));

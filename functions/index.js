@@ -1307,7 +1307,10 @@ async function registrarConsumo(empresaId, custoUsd, tokens) {
     const atual = conSnap.exists ? conSnap.data() : {};
     const novoCusto = (atual.custoUsd || 0) + custoUsd;
     const limite = limiteMensalEmpresa(empSnap.exists ? empSnap.data() : {});
-    tx.set(consumoRef, {
+    // empresa excluída (ou em exclusão) não pode ganhar documento de volta; o total do escritório
+    // continua somando, porque o gasto aconteceu de verdade
+    const viva = empSnap.exists && empSnap.data().excluindo !== true;
+    if (viva) tx.set(consumoRef, {
       mes,
       custoUsd: novoCusto,
       chamadas: (atual.chamadas || 0) + 1,
@@ -1323,7 +1326,7 @@ async function registrarConsumo(empresaId, custoUsd, tokens) {
       chamadas: ((geralSnap.exists ? geralSnap.data().chamadas : 0) || 0) + 1,
       atualizadoEm: FieldValue.serverTimestamp(),
     }, { merge: true });
-    if (empSnap.exists) {
+    if (viva) {
       tx.update(empresaRef, { usoMes: mes, usoPct: percentualUso(novoCusto, limite) });
     }
   });
@@ -1338,7 +1341,7 @@ async function registrarConsumoSeguro(empresaId, custoUsd, tokens) {
       await registrarConsumo(empresaId, custoUsd, tokens);
       return;
     } catch (e) {
-      if (tentativa === 2) console.error("Não consegui registrar o consumo:", e);
+      if (tentativa === 2) console.error("CONSUMO_NAO_REGISTRADO", JSON.stringify({ empresaId, custoUsd, tokens }), e);
       else await new Promise((r) => setTimeout(r, 400));
     }
   }
@@ -1565,6 +1568,9 @@ exports.assistenteChat = onCall(
       throw new HttpsError("not-found", "Empresa não encontrada.");
     }
     const empresa = empresaSnap.data();
+    if (empresa.excluindo === true) {
+      throw new HttpsError("failed-precondition", "Esta empresa está sendo excluída.");
+    }
     log("empresa carregada");
 
     // Mesma regra de visibilidade do front: admin vê tudo, os demais só a empresa deles
@@ -1659,6 +1665,13 @@ exports.assistenteChat = onCall(
     }
 
     const pendentesConsumo = [];
+    // Excluir a empresa apaga tudo, mas não para uma chamada à IA que já estava rodando: quando ela
+    // terminasse, ia regravar mensagens, relatórios e consumo debaixo da empresa apagada. Por isso
+    // a exclusão marca "excluindo" antes de apagar e todo ponto de gravação confere isto.
+    const empresaViva = async () => {
+      const s = await empresaRef.get();
+      return s.exists && s.data().excluindo !== true;
+    };
     async function processarPedido() {
 
     // Histórico de relatórios já processados — vira contexto permanente da IA, independente
@@ -2353,6 +2366,9 @@ exports.assistenteChat = onCall(
       marcadorRolante = ultimoBloco;
     }
     for (let rodada = 1; rodada <= MAX_RODADAS; rodada++) {
+      if (rodada > 1 && !(await empresaViva())) {
+        throw new HttpsError("aborted", "A empresa foi excluída enquanto a resposta era preparada.");
+      }
       // Da 2ª rodada em diante a conversa já carrega o que a rodada anterior trouxe (PDFs
       // reabertos, resultados de ferramenta). Marcar o último bloco faz a rodada seguinte ler
       // isso do cache em vez de pagar de novo por preço cheio. Só um marcador rolante por vez
@@ -2380,6 +2396,9 @@ exports.assistenteChat = onCall(
       }
       if (response.stop_reason !== "tool_use") break;
       houveFerramenta = true;
+      if (!(await empresaViva())) {
+        throw new HttpsError("aborted", "A empresa foi excluída enquanto a resposta era preparada.");
+      }
 
       const usos = response.content.filter((b) => b.type === "tool_use");
       messages.push({ role: "assistant", content: response.content });
@@ -2463,6 +2482,11 @@ exports.assistenteChat = onCall(
     const avisosGeracao = [...new Set(arquivosGerados.flatMap((a) => a.avisos || []))];
     if (avisosGeracao.length > 0) {
       text += `\n\n⚠️ Gerei o arquivo, mas confira antes de importar: ${avisosGeracao.join("; ")}.`;
+    }
+
+    if (!(await empresaViva())) {
+      log("empresa excluída durante o processamento — não grava nada");
+      return { text, usage: response.usage || null, arquivosGerados };
     }
 
     // Os arquivos gerados o servidor já conhece — registra no mês em andamento sem depender
@@ -2556,6 +2580,7 @@ exports.assistenteChat = onCall(
     // agora seria sobrescrever o trabalho de quem já é dono da vez.
     async function gravarSeAindaSouDono(dados) {
       if (!processamentoRef) return;
+      if (!(await empresaViva())) return;   // empresa excluída: não recria o documento de controle
       await db.runTransaction(async (tx) => {
         const snap = await tx.get(processamentoRef);
         if (snap.exists && snap.data().attemptId !== meuAttemptId) {
@@ -2772,6 +2797,9 @@ exports.excluirEmpresa = onCall({ cors: true, timeoutSeconds: 300 }, async (requ
   if (semAcento(String(confirmacaoNome || "").trim()) !== semAcento(esperado)) {
     throw new HttpsError("invalid-argument", "O nome digitado não confere com o da empresa.");
   }
+  // marca antes de apagar: bloqueia pedidos novos e faz as respostas em andamento descartarem o que
+  // iam gravar (ver "empresaViva" no assistenteChat)
+  await ref.update({ excluindo: true });
   await db.recursiveDelete(ref);
   const quem = (request.auth.token && request.auth.token.email) || request.auth.uid;
   console.log(`empresa excluída: ${empresaId} ("${nome}") por ${quem}`);

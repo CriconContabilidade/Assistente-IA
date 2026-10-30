@@ -739,6 +739,33 @@ const pedidoComArquivos = (message, files) => handler({
   const cons2 = banco.get(`assistenteIA_empresas/mv/consumo/${mesCons}`);
   confere('duas chamadas à IA = duas parcelas somadas, nenhuma perdida', cons2 && cons2.chamadas === 2, JSON.stringify(cons2));
 
+  console.log('\n10m) excluir empresa durante um processamento: nada reaparece debaixo da empresa apagada');
+  const chaves = (prefixo) => [...banco.keys()].filter((k) => k.startsWith(prefixo));
+  const apagarEmpresaDoBanco = () => { for (const k of chaves('assistenteIA_empresas/mv')) banco.delete(k); };
+  const pedidoComId = (id, files = []) => handler({ auth: { token: { email: 'contabilidadecricon@gmail.com' } }, data: { empresaId: 'mv', message: 'oi', history: [], files, requestId: id } });
+  const ERRO = async (p) => { try { await p; return null; } catch (e) { return e; } };
+
+  prepararEmpresa();
+  banco.set('assistenteIA_empresas/mv', { ...banco.get('assistenteIA_empresas/mv'), excluindo: true });
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  let e1 = await ERRO(pedidoComId('req-ex-0'));
+  confere('empresa marcada "excluindo" recusa pedido novo', e1 && e1.code === 'failed-precondition' && /sendo exclu/.test(e1.message) && chamadas.length === 0, e1 && e1.message);
+
+  prepararEmpresa();
+  roteiro = [() => { apagarEmpresaDoBanco(); return resp([txt('Resposta pronta')], 'end_turn'); }];
+  let r1 = await pedidoComId('req-ex-1', [arquivoPdf('rel.pdf', PDF_TEXTO)]);
+  confere('a chamada em andamento ainda devolve a resposta pra quem pediu', r1 && r1.text === 'Resposta pronta', r1 && r1.text);
+  confere('mas não recria mensagens, relatórios, documento de controle nem consumo da empresa apagada', chaves('assistenteIA_empresas/mv').length === 0, chaves('assistenteIA_empresas/mv').join(', '));
+  confere('o total do escritório continua somando o gasto que aconteceu', chaves('assistenteIA_consumoGeral/').length >= 1);
+
+  prepararEmpresa();
+  roteiro = [
+    () => { apagarEmpresaDoBanco(); return resp([uso('atualizar_fechamento', { competencia: '08/2026', pendencias: 1 })], 'tool_use'); },
+    resp([txt('nunca chega aqui')], 'end_turn'),
+  ];
+  let e2 = await ERRO(pedidoComId('req-ex-2'));
+  confere('apagada no meio das ferramentas: aborta antes de executar a ferramenta e não grava nada', e2 && e2.code === 'aborted' && chaves('assistenteIA_empresas/mv').length === 0, e2 && (e2.code + ' ' + chaves('assistenteIA_empresas/mv').join(', ')));
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [

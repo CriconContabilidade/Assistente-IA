@@ -1763,6 +1763,10 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   const attachPreview = document.getElementById('attachPreview');
 
   let pendingFiles = [];
+  // Arquivos gerados que vieram COMPLETOS na resposta da função, por requestId. Os grandes demais
+  // pro documento do Firestore chegam lá sem conteúdo; este mapa é o que deixa baixar na hora.
+  const arquivosDaSessao = new Map();
+  let redesenharMensagens = () => {};
   let unsubMessages = null;
   let currentMessages = []; // histórico em memória da empresa ativa, pra mandar como contexto pra IA
 
@@ -1873,12 +1877,14 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
 
   function renderMessagesForActive() {
     if (unsubMessages) unsubMessages();
+    redesenharMensagens = () => {};
     chatBody.innerHTML = "";
     currentMessages = [];
     typingActive = false;
     if (!activeEmpresaId) { chatBody.appendChild(emptyState); return; }
     const msgsCol = collection(db, "assistenteIA_empresas", activeEmpresaId, "mensagens");
-    unsubMessages = onSnapshot(query(msgsCol, orderBy("criadoEm")), snap => {
+    let ultimaSnap = null;
+    const desenhar = (snap) => {
       chatBody.innerHTML = "";
       currentMessages = snap.docs.map(d => d.data());
       const saudacao = empresaRecemCriada && empresaRecemCriada.id === activeEmpresaId
@@ -1898,7 +1904,9 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       // da espera (a lista de mensagens costuma atualizar mais de uma vez por envio).
       if (typingActive) appendTypingIndicator();
       chatBody.scrollTop = chatBody.scrollHeight;
-    });
+    };
+    unsubMessages = onSnapshot(query(msgsCol, orderBy("criadoEm")), snap => { ultimaSnap = snap; desenhar(snap); });
+    redesenharMensagens = () => { if (ultimaSnap) desenhar(ultimaSnap); };
   }
 
   // Mostra, linha a linha, o que foi realmente gravado no arquivo — a ideia é conferir aqui
@@ -1998,10 +2006,15 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     appendSafeMessageText(bubble, m.text || '');
 
     const arquivosGerados = (Array.isArray(m.arquivosGerados) ? m.arquivosGerados : []).filter(a => a && a.nome && a.base64);
+    // arquivo grande demais pro Firestore: o conteúdo completo veio na resposta da função e fica
+    // guardado só nesta sessão da página (some se a página for recarregada)
+    const completosDaSessao = (m.requestId && arquivosDaSessao.get(m.requestId)) || [];
+    completosDaSessao.forEach((g) => { if (!arquivosGerados.some(a => a.nome === g.nome)) arquivosGerados.push(g); });
     // Arquivo grande demais pra caber no documento do Firestore (item 12 da auditoria do Codex)
     // some do filtro acima por não ter base64 — sem aviso, parecia que o arquivo nunca foi
     // gerado. O download em si já funcionou na hora (essa mensagem só é recarregada depois).
-    const arquivosGrandesDemais = (Array.isArray(m.arquivosGerados) ? m.arquivosGerados : []).filter(a => a && a.grandeDemaisPraGravar);
+    const arquivosGrandesDemais = (Array.isArray(m.arquivosGerados) ? m.arquivosGerados : [])
+      .filter(a => a && a.grandeDemaisPraGravar && !completosDaSessao.some(g => g.nome === a.nome));
     for (const fileName of Array.isArray(m.files) ? m.files : []) {
       const chip = document.createElement('div');
       chip.className = 'file-chip';
@@ -2011,7 +2024,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     arquivosGrandesDemais.forEach((arquivo) => {
       const aviso = document.createElement('div');
       aviso.className = 'file-chip';
-      aviso.textContent = `⚠️ ${String(arquivo.nome)} foi gerado, mas era grande demais pra guardar — baixe de novo se precisar (peça pra IA gerar novamente).`;
+      aviso.textContent = `⚠️ ${String(arquivo.nome)} foi gerado, mas era grande demais pra guardar no histórico e não dá mais pra baixar depois de recarregar a página. Peça pra IA gerar de novo e baixe na hora.`;
       bubble.appendChild(aviso);
     });
     arquivosGerados.forEach((arquivo) => {
@@ -2761,6 +2774,10 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
 
       hideTyping();
       setIaStatus(true);
+      // Arquivos grandes demais pro Firestore só existem completos nesta resposta: guarda pra baixar
+      const completos = result && result.data && Array.isArray(result.data.arquivosGerados)
+        ? result.data.arquivosGerados.filter(a => a && a.nome && a.base64) : [];
+      if (completos.length) { arquivosDaSessao.set(requestId, completos); redesenharMensagens(); }
       // A própria função já grava a resposta no Firestore (veja o comentário no backend) —
       // não grava de novo aqui, só espera o onSnapshot trazer ela.
     } catch (err) {
