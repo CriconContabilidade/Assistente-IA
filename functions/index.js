@@ -201,6 +201,9 @@ function decodificarTexto(buffer) {
 const PDF_PAGINA_POBRE_CHARS = 120;
 const PDF_MIN_CHARS_TOTAL = 200;
 const PDF_MAX_CHARS_TEXTO = 450000;
+// PDF que não vira texto (escaneado, com imagem) segue como PDF cru, que a API cobra por página
+// (imagem + texto, alguns milhares de tokens cada): acima disso não vai.
+const PDF_MAX_PAGINAS_CRU = 30;
 // PDF curto (1-2 páginas) com página pobre + imagem é comprovante escaneado; em PDF maior só
 // recusa se mais de 30% das páginas forem assim. Uma capa, contracapa ou aviso final com logotipo
 // não pode jogar fora um extrato de texto perfeito (visto na Holding AFA: 2,6 MB mandados 3 vezes).
@@ -293,7 +296,7 @@ async function pdfParaTexto(buffer, obterCandidatas = async () => []) {
   const aberto = await abrirPdfComSenhas(pdfjs, buffer, obterCandidatas);
   if (!aberto.doc) return { ok: false, motivo: "senha", protegido: true };
   const doc = aberto.doc;
-  const recusa = (motivo) => ({ ok: false, motivo, protegido: aberto.protegido });
+  const recusa = (motivo) => ({ ok: false, motivo, protegido: aberto.protegido, paginas: doc.numPages });
   try {
     const paginas = [];
     const pobresComImagem = [];
@@ -361,6 +364,20 @@ async function blocosDoArquivo(f, opcoes = {}) {
         type: "text",
         text: `--- Conteúdo de ${f.name} (PDF convertido em texto pelo sistema: ${r.paginas.length} página(s); colunas separadas por " | "${r.cabecalhosRemovidos ? "; o cabeçalho que se repetia no topo das páginas seguintes foi omitido, vale o da primeira página" : ""}; imagens, logotipos e gráficos do PDF não vêm no texto — se precisar ver o visual, use buscar_arquivo com original=true)${aviso} ---\n\n${corpo}`,
       }];
+    }
+    // PDF grande demais: antes caía pro PDF cru, que sai MAIS caro que o texto (um Diário de 134 páginas,
+    // 182 mil tokens de texto, estourou o limite da empresa). Agora não vai: a mensagem é recusada e a
+    // pessoa manda só as páginas necessárias.
+    const grandeDemais = r && !r.ok && r.motivo !== "senha"
+      && (r.motivo === "grande" || (r.paginas > PDF_MAX_PAGINAS_CRU && !r.protegido));
+    if (grandeDemais) {
+      const nota = r.motivo === "grande"
+        ? `${r.paginas} páginas, mais de ${Math.round(PDF_MAX_CHARS_TEXTO / 3.5 / 1000)} mil tokens só de texto (uns US$ ${(PDF_MAX_CHARS_TEXTO / 3.5 * 2 / 1e6).toFixed(2)} ou mais só pra ler)`
+        : `${r.paginas} páginas que não viram texto (escaneado ou com imagens), e cada página sai caro`;
+      console.log(`PDF ${f.name} grande demais: ${nota}`);
+      const blocosGrande = [{ type: "text", text: `--- ${f.name}: NÃO li este PDF: é grande demais (${nota}). Diga ao usuário para anexar de novo e escolher só as páginas necessárias no seletor de páginas, ou emitir o relatório só do período que precisa. Não invente nenhum dado dele. ---` }];
+      blocosGrande.grande = { nome: f.name, descricao: nota };
+      return blocosGrande;
     }
     if (r && r.protegido) {
       const motivo = r.motivo === "senha"
@@ -1830,6 +1847,12 @@ exports.assistenteChat = onCall(
         throw new HttpsError("invalid-argument", `Arquivo "${f.name}" é grande demais.`);
       }
       const blocos = await blocosDoArquivo(f, opcoesPdf);
+      if (blocos && blocos.grande) {
+        throw new HttpsError(
+          "invalid-argument",
+          `O PDF "${blocos.grande.nome}" é grande demais pra IA ler de uma vez (${blocos.grande.descricao}). Anexe de novo e escolha só as páginas necessárias no seletor de páginas, ou emita o relatório só do período que precisa (por exemplo, só o mês).`
+        );
+      }
       if (blocos) {
         contentBlocks.push(...blocos);
         arquivosParaGuardar.push(f);

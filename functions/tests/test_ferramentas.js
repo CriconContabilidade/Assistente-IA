@@ -831,6 +831,22 @@ const pedidoComArquivos = (message, files) => handler({
   await pedidoComArquivos('segue', [txtGrande]);
   confere('sem consumo no mês, o mesmo arquivo grande passa (limite cheio)', chamadas.length === 1);
 
+  console.log('\n10r) PDF grande demais não cai mais pro PDF cru (que sai mais caro): mensagem recusada antes de gastar');
+  const linhaLonga = (n, i) => txtPdf(30, 780 - i * 12, `Lancamento ${n}-${i} historico bem comprido pra ocupar espaco no relatorio de teste com valores 1.234,56 e 7.890,12 conta 1234 5678`);
+  const paginaCheia = (n) => Array.from({ length: 60 }, (_, i) => linhaLonga(n, i)).join('');
+  const diarioGrande = criarPdf(Array.from({ length: 70 }, (_, n) => paginaCheia(n)));
+  prepararEmpresa();
+  roteiro = [resp([txt('nao deveria chamar')], 'end_turn')];
+  let eDiario = null;
+  try { await pedidoComArquivos('segue', [arquivoPdf('Diario.pdf', diarioGrande)]); } catch (e) { eDiario = e; }
+  confere('PDF com texto acima do teto: erro claro (páginas e custo), sem chamar a IA e sem mandar o PDF cru', eDiario && eDiario.code === 'invalid-argument' && /70 páginas/.test(eDiario.message) && /seletor de páginas/.test(eDiario.message) && chamadas.length === 0, eDiario && eDiario.message);
+  const escaneadoLongo = criarPdf(Array.from({ length: 31 }, () => txtPdf(50, 700, 'SAC') + 'q 100 0 0 100 50 500 cm BI /W 1 /H 1 /CS /G /BPC 8 ID ' + String.fromCharCode(0x80) + ' EI Q' + String.fromCharCode(10)));
+  prepararEmpresa();
+  roteiro = [resp([txt('nao deveria chamar')], 'end_turn')];
+  let eEscan = null;
+  try { await pedidoComArquivos('segue', [arquivoPdf('escaneado.pdf', escaneadoLongo)]); } catch (e) { eEscan = e; }
+  confere('PDF escaneado com mais de 30 páginas também é recusado (cada página cobra caro)', eEscan && eEscan.code === 'invalid-argument' && /31 páginas/.test(eEscan.message) && chamadas.length === 0, eEscan && eEscan.message);
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [

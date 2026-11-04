@@ -2145,6 +2145,26 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   // Mesmo critério do servidor: menos de 120 caracteres de texto. Só avisa; quem decide é a pessoa.
   const pdfSuspeitas = new Map();
   const PAG_POBRE_CHARS = 120;
+  // Texto de cada página do PDF (File original -> [chars]): é o que o servidor lê e cobra. Dá pra
+  // mostrar o custo estimado antes de enviar e a cada página que se desmarca. Mesma conta do servidor:
+  // 3,5 caracteres por token a US$ 2 por milhão (leitura sem cache).
+  const pdfChars = new Map();
+  const CHARS_MAX_SERVIDOR = 450000;   // acima disso o servidor recusa o PDF
+  const PDF_CARO_USD = 0.10;
+  const usdDeChars = (chars) => (chars / 3.5) * 2 / 1e6;
+  function textoCusto(chars) {
+    const mil = Math.max(1, Math.round(chars / 3.5 / 1000));
+    return `≈ ${mil} mil tokens (US$ ${usdDeChars(chars).toFixed(2).replace('.', ',')})`;
+  }
+  function charsDoPdf(original, marcadas) {
+    const arr = pdfChars.get(original);
+    if (!arr) return null;
+    return arr.reduce((t, c, i) => t + (!marcadas || marcadas[i] ? c : 0), 0);
+  }
+  function pdfCaro(f) {
+    const c = charsDoPdf(f, null);
+    return c != null && usdDeChars(c) >= PDF_CARO_USD;
+  }
   // Planilhas .xlsx com muitas abas (uma por mês, durante anos) custavam centenas de milhares de tokens:
   // lista as abas e deixa escolher quais vão pra IA. O arquivo inteiro continua indo e ficando guardado;
   // só as abas marcadas são lidas agora, e a IA busca as outras sozinha se precisar.
@@ -2247,10 +2267,12 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const OPS = pdfjsLib.OPS || {};
     const opsImagem = new Set([OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject].filter((x) => x !== undefined));
     const lista = [];
+    const porPagina = [];
     for (let n = 1; n <= doc.numPages; n++) {
       const page = await doc.getPage(n);
       const tc = await page.getTextContent();
       const chars = tc.items.reduce((t, i) => t + String(i.str || '').trim().length, 0);
+      porPagina.push(chars);
       if (chars < PAG_POBRE_CHARS) {
         let imagem = false;
         try { imagem = (await page.getOperatorList()).fnArray.some((fn) => opsImagem.has(fn)); } catch (err) { /* sem a checagem de imagem, fica só "pouco texto" */ }
@@ -2258,6 +2280,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       }
       if (page.cleanup) page.cleanup();
     }
+    lista.charsPorPagina = porPagina;
     return lista;
   }
   function formatarPaginas(nums) {
@@ -2409,6 +2432,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       doc = await pdfjsLib.getDocument({ data: new Uint8Array(await f.arrayBuffer()), ...(s ? { password: s.senha } : {}) }).promise;
       if (!doc.numPages || doc.numPages < 2) return;
       const lista = await suspeitasDoDoc(doc);
+      pdfChars.set(f, lista.charsPorPagina);
       if (lista.length) pdfSuspeitas.set(f, lista);
     }
     try {
@@ -2439,7 +2463,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       renderAttachPreview();
     }
     // com um único arquivo pedindo revisão (PDF com páginas suspeitas ou planilha com muitas abas), já abre
-    const comAviso = novos.filter((f) => (pdfSuspeitas.has(f) || xlsxAbas.has(f)) && pendingFiles.includes(f));
+    const comAviso = novos.filter((f) => (pdfSuspeitas.has(f) || xlsxAbas.has(f) || pdfCaro(f)) && pendingFiles.includes(f));
     if (comAviso.length === 1) abrirPreviewAnexo(comAviso[0], pendingFiles.indexOf(comAviso[0]));
   }
   async function arquivoParaEnvio(f) {
@@ -2474,7 +2498,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     toolbar.append(contador, btnTodas, btnNenhuma);
     let suspeitas = pdfSuspeitas.get(origem.original);
     if (!suspeitas && n >= 2) {
-      try { suspeitas = await suspeitasDoDoc(doc); if (suspeitas.length) pdfSuspeitas.set(origem.original, suspeitas); } catch (err) { suspeitas = []; }
+      try { suspeitas = await suspeitasDoDoc(doc); pdfChars.set(origem.original, suspeitas.charsPorPagina); if (suspeitas.length) pdfSuspeitas.set(origem.original, suspeitas); } catch (err) { suspeitas = []; }
     }
     suspeitas = suspeitas || [];
     const btnSuspeitas = document.createElement('button');
@@ -2523,7 +2547,9 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
 
     function atualizar() {
       const qtd = marcadas.filter(Boolean).length;
-      contador.textContent = `${qtd} de ${n} página(s) marcada(s)`;
+      const charsMarcadas = charsDoPdf(origem.original, marcadas);
+      contador.textContent = `${qtd} de ${n} página(s) marcada(s)` + (charsMarcadas != null ? ` · ${textoCusto(charsMarcadas)}` : '');
+      contador.style.color = charsMarcadas != null && charsMarcadas > CHARS_MAX_SERVIDOR ? 'var(--danger)' : '';
       cards.forEach((c, k) => c.classList.toggle('fora', !marcadas[k]));
       aplicarBtn.disabled = qtd === 0;
       aplicarBtn.textContent = qtd === n ? (pdfOrigem.has(f) ? 'Voltar ao PDF inteiro' : 'Enviar o PDF inteiro') : `Enviar só ${qtd} de ${n} página(s)`;
@@ -2781,6 +2807,19 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         an.textContent = '⏳ analisando as páginas...';
         chip.append(an, document.createTextNode(' '));
       }
+      const origPdf = reduzido ? reduzido.original : f;
+      const charsPdf = ehPdf(f) ? charsDoPdf(origPdf, reduzido ? reduzido.marcadas : null) : null;
+      if (charsPdf != null && usdDeChars(charsPdf) >= 0.03 && !arquivosEmAnalise.has(f)) {
+        const grandeDemais = charsPdf > CHARS_MAX_SERVIDOR;
+        const caro = document.createElement('button');
+        caro.type = 'button';
+        caro.className = 'attach-aviso';
+        caro.textContent = grandeDemais
+          ? `🚫 ${textoCusto(charsPdf)}: grande demais pra IA ler — escolha as páginas`
+          : `${usdDeChars(charsPdf) >= PDF_CARO_USD ? '⚠️ ' : ''}${textoCusto(charsPdf)} só pra ler${usdDeChars(charsPdf) >= PDF_CARO_USD ? ' — clique p/ escolher páginas' : ''}`;
+        caro.addEventListener('click', () => abrirPreviewAnexo(f, i));
+        chip.append(caro, document.createTextNode(' '));
+      }
       const suspOrig = pdfSuspeitas.get(reduzido ? reduzido.original : f);
       const suspAtivas = suspOrig ? suspOrig.filter((x) => !reduzido || reduzido.marcadas[x.n - 1]) : [];
       if (suspAtivas.length) {
@@ -2810,6 +2849,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       remove.addEventListener('click', () => {
         pdfSuspeitas.delete((pdfOrigem.get(pendingFiles[i]) || {}).original || pendingFiles[i]);
         xlsxAbas.delete(pendingFiles[i]);
+        pdfChars.delete((pdfOrigem.get(pendingFiles[i]) || {}).original || pendingFiles[i]);
         pdfOrigem.delete(pendingFiles[i]);
         pdfSenhas.delete(pendingFiles[i]);
         pendingFiles.splice(i, 1);
@@ -2851,6 +2891,14 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     if (!text && pendingFiles.length === 0) return;
     // não deixa enviar enquanto a análise dos anexos (senha, reenvio, páginas) não terminou
     if (envioBloqueadoPorAnalise()) return;
+    for (const f of pendingFiles) {
+      const red = pdfOrigem.get(f);
+      const c = ehPdf(f) ? charsDoPdf(red ? red.original : f, red ? red.marcadas : null) : null;
+      if (c != null && c > CHARS_MAX_SERVIDOR) {
+        alert(`O PDF "${f.name}" é grande demais pra IA ler (${textoCusto(c)}). Clique no aviso do anexo e escolha só as páginas necessárias (ou emita o relatório só do período que precisa).`);
+        return;
+      }
+    }
 
     let totalBytes = 0;
     for (const f of pendingFiles) {
@@ -2902,6 +2950,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       pdfSenhas.clear();
       pdfProtegidos.clear();
       pdfSuspeitas.clear();
+      pdfChars.clear();
       xlsxAbas.clear();
       renderAttachPreview();
 
