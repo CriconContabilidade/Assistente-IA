@@ -221,7 +221,7 @@ const pedidoComArquivos = (message, files) => handler({
   confere('personalidade: bordões do Michael + regra inviolável dos dados, e sem duplo sentido sexual', chamadas[0].system[0].text.includes('Dundie') && chamadas[0].system[0].text.includes('REGRA INVIOLÁVEL') && chamadas[0].system[0].text.includes('nunca coloque piada dentro de um arquivo gerado') && chamadas[0].system[0].text.includes('nada de duplo sentido sexual') && !/Foi o que ela disse/i.test(chamadas[0].system[0].text));
   confere('personalidade: clichês de estagiário e Nordeste com carinho, sem estigma', /estagiário/.test(chamadas[0].system[0].text) && chamadas[0].system[0].text.includes('acarajé') && chamadas[0].system[0].text.includes('NUNCA piada que mostre nordestino'));
   confere('prompt traz a personalidade (Michael Scott, com 🥁 depois da piada)', chamadas[0].system[0].text.includes('Michael Scott') && chamadas[0].system[0].text.includes('🥁'));
-  confere('ferramentas enviadas na chamada', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(',') === 'gerar_arquivo,buscar_arquivo,atualizar_fechamento,verificar_cadastro,salvar_codigo_cnpj_empresa,consultar_padrao,salvar_padrao,salvar_observacao', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(','));
+  confere('ferramentas enviadas na chamada', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(',') === 'gerar_arquivo,buscar_arquivo,atualizar_fechamento,verificar_cadastro,salvar_codigo_cnpj_empresa,consultar_padrao,salvar_padrao,salvar_observacao,ver_ultimo_arquivo', chamadas[0].tools && chamadas[0].tools.map((t) => t.name).join(','));
   const seg = chamadas[1].messages;
   const resultado = seg[seg.length - 1].content[0];
   confere('2a chamada leva tool_use e tool_result com o mesmo id',
@@ -560,7 +560,7 @@ const pedidoComArquivos = (message, files) => handler({
   confere('bloco fixo é IDÊNTICO entre empresas (é isso que permite o cache compartilhado)', reqA.system[0].text === reqB.system[0].text && reqA.system[0].text.length > 20000, String(reqA.system[0].text.length));
   confere('as definições das ferramentas (que vêm antes) também são idênticas', JSON.stringify(reqA.tools) === JSON.stringify(reqB.tools));
   confere('nada da empresa vaza pro bloco fixo', !/MV tem observação|Outra tem regra|Outra Empresa|21208224000163|43617343000102/.test(reqA.system[0].text));
-  confere('dados da empresa estão no 2º bloco', reqA.system[1].text.includes('Empresa atual: MV') && reqA.system[1].text.includes('XYZ') && reqB.system[1].text.includes('Empresa atual: Outra Empresa Ltda') && reqB.system[1].text.includes('QWE'));
+  confere('dados da empresa estão no 2º bloco', reqA.system[1].text.includes('Empresa atual: MV') && reqB.system[1].text.includes('Empresa atual: Outra Empresa Ltda') && !reqA.system[1].text.includes('XYZ') && !reqB.system[1].text.includes('QWE') && ctxAtual(reqA).includes('XYZ') && ctxAtual(reqA).includes('185') && ctxAtual(reqB).includes('QWE') && ctxAtual(reqB).includes('Código no Domínio: 77'));
   confere('painel do fechamento NÃO fica no prompt de sistema (vai na mensagem atual)', !/PAINEL DO FECHAMENTO|Competência em andamento/.test(reqA.system[1].text) && /PAINEL DO FECHAMENTO/.test(ctxAtual(reqA)));
   confere('os dois blocos têm ponto de cache de 1h', reqA.system.every((b) => b.cache_control && b.cache_control.ttl === '1h'));
   confere('as regras não mandam mais olhar "acima" pros dados da empresa', !/resumos acima|resumo acima|lista acima|observações acima/.test(reqA.system[0].text));
@@ -810,7 +810,7 @@ const pedidoComArquivos = (message, files) => handler({
   const ctxEstado = ctxAtual(chamadas[0]);
   confere('arquivo com mais de 3 dias vira só um resumo (sem as linhas)', !ctxEstado.includes('LINHA VELHA UNICA') && !ctxEstado.includes('11111,11') && /ÚLTIMO ARQUIVO lanctos \(lanctos\.txt\): 1 linha/.test(ctxEstado), ctxEstado.slice(0, 400));
   confere('arquivo de hoje continua com as linhas (pra poder corrigir)', ctxEstado.includes('52998224725') && ctxEstado.includes('22222.22'));
-  confere('o resumo do arquivo antigo diz o que fazer se pedirem correção', /peça o relatório de novo/.test(ctxEstado));
+  confere('o resumo do arquivo antigo diz o que fazer se pedirem correção', /ver_ultimo_arquivo/.test(ctxEstado));
 
   console.log('\n10q) limite: o que sobra tem que pagar pelo menos a leitura dos arquivos da mensagem');
   prepararEmpresa();
@@ -943,6 +943,75 @@ const pedidoComArquivos = (message, files) => handler({
     },
   ];
   await pedido('gera os lançamentos');
+
+  console.log('\n10v) o que muda durante a conversa NÃO invalida o cache do histórico (observação, código/CNPJ, relatório novo)');
+  const ms = (m) => ({ toMillis: () => m, toDate: () => new Date(m) });
+  prepararEmpresa();
+  banco.set('assistenteIA_empresas/mv/documentos/d1', { arquivos: ['antigo.pdf'], resumo: 'RESUMO-ANTIGO-ABC', criadoEm: ms(Date.now() - 3 * 3600000) });
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('oi');
+  const sistemaBase = JSON.stringify(chamadas[0].system);
+  confere('relatório com mais de 2 horas fica no histórico do prompt de sistema', chamadas[0].system[1].text.includes('antigo.pdf') && chamadas[0].system[1].text.includes('RESUMO-ANTIGO-ABC'));
+  chamadas.length = 0;
+  banco.set('assistenteIA_empresas/mv', { ...banco.get('assistenteIA_empresas/mv'), notas: ['Regra nova NOTA-NOVA-QWERTY'], codigoDominio: '999', cnpj: '43617343000102' });
+  banco.set('assistenteIA_empresas/mv/documentos/d2', { arquivos: ['recente.pdf'], resumo: 'RESUMO-RECENTE-XYZ', criadoEm: ms(Date.now() - 600000) });
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('oi de novo');
+  confere('salvar observação, mudar código/CNPJ ou anexar relatório NÃO mexe no prompt de sistema (cache do histórico preservado)', JSON.stringify(chamadas[0].system) === sistemaBase);
+  const ctxNovo = ctxAtual(chamadas[0]);
+  confere('a observação nova e o código/CNPJ chegam no contexto da mensagem', ctxNovo.includes('NOTA-NOVA-QWERTY') && ctxNovo.includes('Código no Domínio: 999') && ctxNovo.includes('43617343000102'));
+  confere('relatório enviado há minutos vai no contexto (com o resumo), não no prompt de sistema', ctxNovo.includes('recente.pdf') && ctxNovo.includes('RESUMO-RECENTE-XYZ') && !chamadas[0].system[1].text.includes('recente.pdf'));
+
+  console.log('\n10w) estado com arquivo grande: só resumo; ver_ultimo_arquivo devolve as linhas; salvar_padrao com substituir');
+  prepararEmpresa();
+  const linhasGrandes = Array.from({ length: 600 }, (_, i) => ({ data: '10/08/2026', debito: '384', credito: '7', valor: 100 + i, complemento: `LINHA-GRANDE-${i} com historico comprido pra encher o estado salvo do jeito certo` }));
+  banco.set('assistenteIA_empresas/mv/estado/atual', { arquivos: { lanctos: { nome: 'lanctos.txt', geradoEm: new Date().toISOString(), linhas: linhasGrandes } } });
+  roteiro = [
+    resp([uso('ver_ultimo_arquivo', { tipo: 'lanctos' })], 'tool_use'),
+    (params) => {
+      const ctx = params.messages.find((m) => m.role === 'user').content[0].text;
+      const res = params.messages[params.messages.length - 1].content[0];
+      const texto = String(res.content);
+      confere('arquivo de 600 linhas não entra inteiro no contexto (acima de 25 mil caracteres): só o resumo com a dica da ferramenta', !ctx.includes('LINHA-GRANDE-300') && /ÚLTIMO ARQUIVO lanctos \(lanctos\.txt\): 600 linha/.test(ctx) && /ver_ultimo_arquivo/.test(ctx), ctx.slice(0, 200));
+      confere('ver_ultimo_arquivo devolve as 600 linhas exatas, em tabela', !res.is_error && texto.includes('LINHA-GRANDE-0 ') && texto.includes('LINHA-GRANDE-599') && texto.includes('data | debito | credito | valor | complemento'), texto.slice(0, 200));
+      return resp([uso('ver_ultimo_arquivo', { tipo: 'baixa_ent' })], 'tool_use');
+    },
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('tipo sem arquivo guardado devolve erro claro', res.is_error === true && /Não há arquivo do tipo/.test(res.content), res.content);
+      return resp([uso('salvar_padrao', { palavrasChave: ['TARIFA TESTE'], debito: '384', credito: '7' })], 'tool_use');
+    },
+    (params) => {
+      confere('padrão novo é salvo', !params.messages[params.messages.length - 1].content[0].is_error);
+      return resp([uso('salvar_padrao', { palavrasChave: ['TARIFA TESTE'], debito: '385', credito: '7' })], 'tool_use');
+    },
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('sem substituir, o conflito continua sendo explicado', res.is_error === true && /já existe um padrão/.test(res.content), res.content);
+      return resp([uso('salvar_padrao', { palavrasChave: ['TARIFA TESTE'], debito: '385', credito: '7', substituir: true })], 'tool_use');
+    },
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('com substituir=true a correção troca o padrão em vez de dar conflito', !res.is_error, res.content);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('corrige o arquivo');
+  roteiro = [
+    resp([uso('consultar_padrao', { descricao: 'TARIFA TESTE JANEIRO' })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('a consulta devolve o padrão corrigido (débito 385), um só', /385/.test(res.content) && !/Débito 384/.test(res.content), String(res.content).slice(0, 200));
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('consulta o padrão');
+
+  console.log('\n10x) regras do prompt: perguntas em lote, salvar padrão na mesma resposta, buscar_arquivo na hora certa');
+  const fixoTxt = chamadas[0].system[0].text;
+  confere('configuração inicial e conciliação perguntam em lotes de 5 a 8 (não um por um)', /LOTES de 5 a 8 tipos por mensagem/.test(fixoTxt) && /pergunte em lotes de 5 a 8 tipos por mensagem/.test(fixoTxt) && !/pergunte um por um/.test(fixoTxt) && !/um de cada vez ou em pequenos grupos/.test(fixoTxt));
+  confere('padrão confirmado é salvo na mesma resposta, sem "posso salvar?" em outra mensagem; correção usa substituir', /NA MESMA RESPOSTA/.test(fixoTxt) && /substituir=true/.test(fixoTxt) && !/pergunte se pode salvar \(nunca salve sozinho/.test(fixoTxt));
+  confere('buscar_arquivo só na rodada em que já vai gerar o arquivo (nunca com pergunta pendente)', /NUNCA chame buscar_arquivo pra montar um arquivo enquanto houver pergunta ou confirmação pendente/.test(fixoTxt));
 
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
