@@ -794,6 +794,24 @@ const pedidoComArquivos = (message, files) => handler({
   const docAbas = [...banco.entries()].find(([k]) => /documentos/.test(k) && !/conteudo/.test(k.split('documentos/')[1] || ''));
   confere('lista válida passa e fica registrada no documento', docAbas && docAbas[1].arquivosInfo && docAbas[1].arquivosInfo[0].abas.join() === 'OUT26,SET26', docAbas && JSON.stringify(docAbas[1].arquivosInfo));
 
+  console.log('\n10p) estado salvo: linhas de arquivo antigo não são reenviadas a cada mensagem');
+  prepararEmpresa();
+  const velho = new Date(Date.now() - 10 * 86400000).toISOString();
+  const recente = new Date(Date.now() - 3600000).toISOString();
+  banco.set('assistenteIA_empresas/mv/estado/atual', {
+    pendencias: ['pendencia do mes passado'],
+    arquivos: {
+      lanctos: { nome: 'lanctos.txt', geradoEm: velho, linhas: [{ data: '10/09/2026', debito: '384', credito: '7', valor: 11111.11, complemento: 'LINHA VELHA UNICA' }] },
+      baixa_ent: { nome: 'baixa_ent.txt', geradoEm: recente, linhas: [{ numero: '99', cnpj: '52998224725', valor: 22222.22 }] },
+    },
+  });
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('oi');
+  const ctxEstado = ctxAtual(chamadas[0]);
+  confere('arquivo com mais de 3 dias vira só um resumo (sem as linhas)', !ctxEstado.includes('LINHA VELHA UNICA') && !ctxEstado.includes('11111,11') && /ÚLTIMO ARQUIVO lanctos \(lanctos\.txt\): 1 linha/.test(ctxEstado), ctxEstado.slice(0, 400));
+  confere('arquivo de hoje continua com as linhas (pra poder corrigir)', ctxEstado.includes('52998224725') && ctxEstado.includes('22222.22'));
+  confere('o resumo do arquivo antigo diz o que fazer se pedirem correção', /peça o relatório de novo/.test(ctxEstado));
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [

@@ -1238,7 +1238,12 @@ function linhasEmTabela(linhas) {
   const valor = (v) => (v == null ? "" : String(v).replace(/[|\r\n]+/g, " ").trim());
   return [campos.join(" | "), ...linhas.map((l) => campos.map((k) => valor(l && l[k])).join(" | "))].join("\n");
 }
-function montarBlocoEstado(estado) {
+// O estado salvo vai inteiro, a cada mensagem, no começo da mensagem atual — fora do cache, a preço
+// cheio de entrada. As linhas do último arquivo gerado (até ~17 mil tokens) eram reenviadas por semanas,
+// inclusive em conversas do mês seguinte que nada tinham a ver com elas. Passados poucos dias, fica só
+// uma linha de resumo; correção de arquivo é coisa do mesmo dia ou dos dias seguintes.
+const ESTADO_ARQUIVOS_DIAS = 3;
+function montarBlocoEstado(estado, agora = Date.now()) {
   if (!estado || typeof estado !== "object") return null;
   const partes = [];
   const entidades = Array.isArray(estado.entidades) ? estado.entidades.filter((e) => e && e.nome && e.cnpj) : [];
@@ -1253,6 +1258,11 @@ function montarBlocoEstado(estado) {
   let usado = 0;
   for (const [tipo, a] of arquivos) {
     if (!a || !Array.isArray(a.linhas)) continue;
+    const idadeMs = agora - Date.parse(a.geradoEm || "");
+    if (Number.isFinite(idadeMs) && idadeMs > ESTADO_ARQUIVOS_DIAS * 86400000) {
+      partes.push(`ÚLTIMO ARQUIVO ${tipo} (${a.nome || tipo}): ${a.linhas.length} linha(s), gerado em ${a.geradoEm} — as linhas não vêm mais aqui porque o arquivo já é antigo (economia de custo). Se o usuário pedir pra corrigir esse arquivo antigo, peça o relatório de novo; arquivo de um mês novo se gera do zero.`);
+      continue;
+    }
     const json = linhasEmTabela(a.linhas);
     if (usado + json.length > LIMITE_ESTADO_ARQUIVOS_CHARS) {
       partes.push(`ÚLTIMO ARQUIVO ${tipo} (${a.nome || tipo}): ${a.linhas.length} linha(s) — linhas omitidas aqui por tamanho; se precisar corrigir, peça ao usuário pra reenviar ou refaça do relatório.`);
