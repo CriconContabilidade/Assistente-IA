@@ -1948,7 +1948,86 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   // Mostra, linha a linha, o que foi realmente gravado no arquivo — a ideia é conferir aqui
   // e não descobrir o erro só quando o Domínio recusar a importação. Vem fechada pra não
   // tomar a conversa inteira; um clique abre.
+  // Arquivo do leiaute padrão do Domínio (registros separados por "|", ex.: 0000, 3000, 3020): uma tabela por
+  // tipo de registro, com os nomes dos campos do próprio leiaute (vêm em arquivo.layouts). Colunas vazias em
+  // todas as linhas ficam de fora, e cada imposto (3020) mostra de qual nota é.
+  function renderConferenciaPipe(arquivo) {
+    const layouts = arquivo.layouts && typeof arquivo.layouts === 'object' ? arquivo.layouts : {};
+    let linhas = [];
+    try {
+      linhas = atob(String(arquivo.base64 || '')).split(/\r?\n/).filter((l) => l !== '').map((l) => l.split('|').slice(1, -1));
+    } catch (err) {
+      console.warn('Não deu pra montar a conferência de', arquivo.nome, err);
+    }
+    if (!linhas.length) return null;
+    const grupos = [];
+    let notaAtual = '';
+    linhas.forEach((cel) => {
+      const id = cel[0];
+      let g = grupos.find((x) => x.id === id);
+      if (!g) { g = { id, linhas: [] }; grupos.push(g); }
+      if (id === '3000') notaAtual = cel[6] || '';
+      g.linhas.push(id === '3020' ? [notaAtual, ...cel.slice(1)] : cel.slice(1));
+    });
+    const TITULOS = { '0000': 'Empresa', '3000': 'Notas', '3020': 'Impostos das notas' };
+
+    const caixa = document.createElement('div');
+    caixa.className = 'conferencia';
+    const topo = document.createElement('div');
+    topo.className = 'conferencia-topo';
+    const titulo = document.createElement('div');
+    titulo.className = 'conferencia-titulo';
+    const qtdNotas = (grupos.find((g) => g.id === '3000') || { linhas: [] }).linhas.length;
+    titulo.append(document.createTextNode(`Conferir ${String(arquivo.titulo || arquivo.nome)} `));
+    const detalhe = document.createElement('span');
+    detalhe.textContent = `(${qtdNotas} ${qtdNotas === 1 ? 'nota' : 'notas'})`;
+    titulo.appendChild(detalhe);
+    const seta = document.createElement('div');
+    seta.className = 'conferencia-seta';
+    seta.textContent = '▼ ver';
+    topo.append(titulo, seta);
+
+    const corpo = document.createElement('div');
+    corpo.className = 'conferencia-corpo';
+    corpo.hidden = true;
+    grupos.forEach((g) => {
+      const nomesCampos = Array.isArray(layouts[g.id]) ? layouts[g.id].slice(1) : [];
+      const cabecalhos = (g.id === '3020' ? ['Nota'] : []).concat(g.linhas[0].slice(g.id === '3020' ? 1 : 0).map((_, i) => nomesCampos[i] || `Campo ${i + 2}`));
+      const usar = cabecalhos.map((_, c) => g.linhas.some((l) => (l[c] === undefined ? '' : String(l[c])) !== ''));
+      const sub = document.createElement('div');
+      sub.className = 'conferencia-titulo';
+      sub.textContent = `${TITULOS[g.id] || `Registro ${g.id}`} (registro ${g.id})`;
+      sub.style.margin = '8px 0 4px';
+      const tabela = document.createElement('table');
+      const trCab = document.createElement('tr');
+      cabecalhos.forEach((h, c) => { if (usar[c]) { const th = document.createElement('th'); th.textContent = String(h); trCab.appendChild(th); } });
+      const thead = document.createElement('thead');
+      thead.appendChild(trCab);
+      const tbody = document.createElement('tbody');
+      g.linhas.forEach((l) => {
+        const tr = document.createElement('tr');
+        cabecalhos.forEach((_, c) => {
+          if (!usar[c]) return;
+          const td = document.createElement('td');
+          const v = l[c] === undefined ? '' : String(l[c]);
+          if (v === '') { td.className = 'vazia'; td.textContent = '—'; } else td.textContent = v;
+          tr.appendChild(td);
+        });
+        tbody.appendChild(tr);
+      });
+      tabela.append(thead, tbody);
+      corpo.append(sub, tabela);
+    });
+    topo.addEventListener('click', () => {
+      corpo.hidden = !corpo.hidden;
+      seta.textContent = corpo.hidden ? '▼ ver' : '▲ fechar';
+    });
+    caixa.append(topo, corpo);
+    return caixa;
+  }
+
   function renderConferencia(arquivo) {
+    if (arquivo && arquivo.formato === 'pipe') return renderConferenciaPipe(arquivo);
     const colunas = Array.isArray(arquivo.colunas) ? arquivo.colunas : [];
     // As células saem do próprio arquivo: o base64 está em Latin-1 (como o Domínio lê), e o
     // atob devolve exatamente um caractere por byte. ";" nunca aparece dentro de um campo —

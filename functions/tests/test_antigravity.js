@@ -94,6 +94,36 @@ r = gera({ tipo: 'servico_prest', linhas: [{ ...nfBase, valorIrrf: 22.87, valorC
 c = r.arq && celulasDe(r.arq)[0];
 confere('a base usa o valor contábil quando ele difere do valor dos serviços', c && c[15] === '100');
 
+console.log('\nNFS NO LEIAUTE PADRAO (registros 0000, 3000 e 3020) - testado de verdade na MV: o COSIRF 38 grava');
+const nfsPadrao = { tipo: 'nfs_padrao', empresaCnpj: '21208224000163', linhas: [{ especie: 67, cnpj: '26989715002903', acumulador: 1, serie: 'U', numeroDocumento: '153', data: '31/10/2026', cfps: 9101, valorServicos: 64141.75, impostos: [{ codigo: 38, valor: 6061.39 }] }] };
+r = gera(nfsPadrao);
+const linhasPipe = (arq) => Buffer.from(arq.base64, 'base64').toString('latin1').split(/\r?\n/).filter(Boolean);
+let lp = r.arq && linhasPipe(r.arq);
+confere('arquivo com 3 registros: 0000, 3000 e 3020', lp && lp.length === 3 && lp[0] === '|0000|21208224000163|' && lp[1].startsWith('|3000|') && lp[2].startsWith('|3020|'), lp && JSON.stringify(lp));
+confere('registro 3000 idêntico ao arquivo que o Domínio da MV aceitou (32 campos)', lp && lp[1] === '|3000|67|26989715002903||1|U|153|||31/10/2026|31/10/2026|64141,75||||||||0|9101||||||||64141,75|0,00|||' && lp[1].split('|').length === 34, lp && lp[1]);
+confere('registro 3020 do COSIRF (38) com 11 campos, alíquota 9,45 e valor 6.061,39', lp && lp[2].startsWith('|3020|38||') && lp[2].split('|').length === 13 && lp[2].includes('|9,45|6061,39|0,00|0,00|64141,75|'), lp && lp[2]);
+confere('base ajustada em 1 centavo (64141,74) pro Domínio recalcular exatamente 6.061,39 (ele dava 6.061,40 e o líquido saía 1 centavo errado)', lp && lp[2].startsWith('|3020|38||64141,74|9,45|6061,39|') && Math.round(6414174 * 9.45 / 100) === 606139, lp && lp[2]);
+confere('o ajuste da base é avisado', r.arq && r.arq.avisos.some((a) => /base de cálculo ajustada de 64141,75 para 64141,74/.test(a)), r.arq && JSON.stringify(r.arq.avisos));
+confere('metadados pra tela montar a conferência por registro', r.arq && r.arq.formato === 'pipe' && r.arq.layouts['3000'].length === 32 && r.arq.layouts['3020'].length === 11 && r.arq.nome === 'NFS_Dominio_Padrao.txt');
+confere('quebra de linha do Windows e sem acento', r.arq && Buffer.from(r.arq.base64, 'base64').toString('latin1').endsWith('|\r\n'));
+r = gera({ ...nfsPadrao, linhas: [{ ...nfsPadrao.linhas[0], impostos: [{ codigo: 16, valor: 10, base: 100 }] }] });
+lp = r.arq && linhasPipe(r.arq);
+confere('conta que já fecha não mexe na base nem avisa (100 x 10% = 10)', lp && lp[2] === '|3020|16||100,00|10,00|10,00|0,00|0,00|64141,75|||' && r.arq.avisos.length === 0, lp && lp[2]);
+r = gera({ ...nfsPadrao, linhas: [nfsPadrao.linhas[0], { ...nfsPadrao.linhas[0], numeroDocumento: '154', impostos: [] }] });
+lp = r.arq && linhasPipe(r.arq);
+confere('duas notas: um 0000 só, cada 3000 seguido dos seus impostos', lp && lp.length === 4 && lp.filter((x) => x.startsWith('|0000|')).length === 1 && lp[1].includes('|153|') && lp[2].startsWith('|3020|') && lp[3].includes('|154|'));
+r = gera({ ...nfsPadrao, linhas: [{ ...nfsPadrao.linhas[0], especie: undefined }] });
+confere('sem código da espécie: erro claro', !!r.erro && /espécie/.test(r.erro), r.erro);
+r = gera({ ...nfsPadrao, empresaCnpj: '' });
+confere('empresa sem CNPJ: erro claro (o registro 0000 precisa dele)', !!r.erro && /CNPJ da empresa/.test(r.erro), r.erro);
+r = gera({ ...nfsPadrao, linhas: [{ ...nfsPadrao.linhas[0], impostos: [{ codigo: 38, valor: 90000 }] }] });
+confere('alíquota fora de 0 a 100% (o erro que estourou a coluna na MV) é recusada antes de gerar', !!r.erro && /fora do possível/.test(r.erro), r.erro);
+r = gera({ ...nfsPadrao, linhas: [{ ...nfsPadrao.linhas[0], fatoGeradorCosirf: 'X' }] });
+confere('fato gerador só aceita E ou P', !!r.erro && /E \(emissão\) ou P/.test(r.erro), r.erro);
+r = gera({ ...nfsPadrao, linhas: [{ ...nfsPadrao.linhas[0], fatoGeradorCosirf: 'p', observacao: 'Aluguel | outubro; ref. “Sócio”' }] });
+lp = r.arq && linhasPipe(r.arq);
+confere('fato gerador P entra na posição 17; observação sem "|" nem ";"', lp && lp[1].split('|')[17] === 'P' && lp[1].split('|')[13] === 'Aluguel outubro ref. "Socio"', lp && lp[1]);
+
 console.log('\nSANITIZACAO E CARACTERES');
 r = gera({ tipo: 'lanctos', linhas: [L({ debito: '1', credito: '2', valor: 5, complemento: 'Pgto NF 123; parcela 2\r\nref. agosto' })] });
 const hist = r.arq && celulasDe(r.arq)[0][5];

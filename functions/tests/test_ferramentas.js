@@ -1013,6 +1013,25 @@ const pedidoComArquivos = (message, files) => handler({
   confere('padrão confirmado é salvo na mesma resposta, sem "posso salvar?" em outra mensagem; correção usa substituir', /NA MESMA RESPOSTA/.test(fixoTxt) && /substituir=true/.test(fixoTxt) && !/pergunte se pode salvar \(nunca salve sozinho/.test(fixoTxt));
   confere('buscar_arquivo só na rodada em que já vai gerar o arquivo (nunca com pergunta pendente)', /NUNCA chame buscar_arquivo pra montar um arquivo enquanto houver pergunta ou confirmação pendente/.test(fixoTxt));
 
+  console.log('\n10y) gerar_arquivo nfs_padrao: usa o CNPJ cadastrado da empresa no registro 0000 e entra no estado salvo');
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('gerar_arquivo', { tipo: 'nfs_padrao', linhas: [{ especie: 67, cnpj: '26989715002903', acumulador: 1, numeroDocumento: '153', data: '31/10/2026', cfps: 9101, valorServicos: 64141.75, impostos: [{ codigo: 38, valor: 6061.39 }] }] })], 'tool_use'),
+    resp([txt('Gerei.')], 'end_turn'),
+  ];
+  const rNfs = await pedido('gera a nota 153');
+  const arqNfs = rNfs.arquivosGerados[0];
+  const linhasNfs = Buffer.from(arqNfs.base64, 'base64').toString('latin1').split(/\r?\n/).filter(Boolean);
+  confere('o 0000 leva o CNPJ cadastrado da MV e o 3020 leva o COSIRF', arqNfs.nome === 'NFS_Dominio_Padrao.txt' && linhasNfs[0] === '|0000|21208224000163|' && linhasNfs[2].startsWith('|3020|38||'), JSON.stringify(linhasNfs));
+  confere('arquivo marcado como pipe (a tela monta a conferência por registro)', arqNfs.formato === 'pipe' && !!arqNfs.layouts);
+  const estadoNfs = banco.get('assistenteIA_empresas/mv/estado/atual');
+  confere('as linhas (com os impostos) ficam no estado salvo pra correção', estadoNfs && estadoNfs.arquivos.nfs_padrao && estadoNfs.arquivos.nfs_padrao.linhas[0].impostos[0].codigo === 38);
+  chamadas.length = 0;
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('corrige a nota 153');
+  confere('no contexto da mensagem seguinte os impostos aparecem como JSON, não "[object Object]"', /nfs_padrao/.test(ctxAtual(chamadas[0])) && !/\[object Object\]/.test(ctxAtual(chamadas[0])) && /"codigo":38/.test(ctxAtual(chamadas[0])), ctxAtual(chamadas[0]).slice(0, 600));
+  confere('o prompt explica quando usar cada layout e como importar o arquivo novo', /nfs_padrao/.test(chamadas[0].system[0].text) && /Importação Padrão > Leiaute Domínio Sistemas com Separador/.test(chamadas[0].system[0].text) && /NÃO consegue lançar o COSIRF/.test(chamadas[0].system[0].text));
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [

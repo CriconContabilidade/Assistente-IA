@@ -917,6 +917,7 @@ const FILE_NAMES = {
   baixa_sai: "baixa_sai.txt",
   baixa_ser: "baixa_ser.txt",
   servico_prest: "ServicoPrest.txt",
+  nfs_padrao: "NFS_Dominio_Padrao.txt",
 };
 
 // O Domínio não tem marcador de "fim de lote" — sem o "1" pra abrir o próximo lançamento, ele
@@ -1090,6 +1091,113 @@ function buildServicoPrestLines(linhas, avisos) {
   });
 }
 
+// ---------------- Nota Fiscal de Serviço no "Leiaute Domínio Sistemas com Separador" ----------------
+// O layout simples (ServicoPrest.txt, colunas com ";") só tem colunas de IRRF, PIS, COFINS, CSLL, CRF e
+// INSS: o valor da coluna do IRRF entra como IRRF (imposto 16) e NÃO existe coluna pro COSIRF (38). No
+// leiaute padrão, cada imposto é uma linha do registro 3020 com o código do imposto (16 IRRF, 22 PIS
+// retido, 23 COFINS retido, 24 CSLL retido, 25 CRF, 26 INSS retido, 38 COSIRF, 39 IRRFP, 63 IRRF-APF).
+// Campos conforme o leiaute oficial da Domínio (suporte.dominioatendimento.com, solução 672): registro
+// 0000 (empresa), 3000 (nota, 32 campos) e 3020 (imposto da nota, 11 campos), separados por "|", com
+// vírgula nos decimais. Importa por Utilitários > Importação > Importação Padrão > Leiaute Domínio
+// Sistemas com Separador.
+const NFS_PADRAO_CAMPOS_3000 = ["Registro", "Código da espécie", "Inscrição do cliente", "UF do cliente", "Acumulador", "Série", "Nº documento", "Segmento", "Documento final", "Data do serviço", "Data da emissão", "Valor contábil", "Observação", "Cód. observação", "Fato gerador CRF", "Fato gerador IRRF", "Fato gerador COSIRF", "Fato gerador IRRFP", "Cód. município", "Modelo/situação", "CFPS", "Sub-série", "IE do cliente", "IM do cliente", "Chave NFS-e", "SCP", "Reinf - tipo de serviço", "Reinf - indicativo", "Valor serviços", "Desconto", "Tipo do título", "Identificação"];
+const NFS_PADRAO_CAMPOS_3020 = ["Registro", "Imposto", "% redução da base", "Base de cálculo", "Alíquota", "Valor do imposto", "Isentas", "Outras", "Valor contábil", "Cód. recolhimento", "Nat. rendimento"];
+const NFS_PADRAO_LAYOUTS = { "0000": ["Registro", "Inscrição da empresa"], "3000": NFS_PADRAO_CAMPOS_3000, "3020": NFS_PADRAO_CAMPOS_3020 };
+function decPipe(n, rotulo, obrigatorio = false) {
+  if (n === null || n === undefined || n === "") {
+    if (obrigatorio) throw new Error(`${rotulo}: informe o valor`);
+    return "";
+  }
+  const v = Number(n);
+  if (!Number.isFinite(v)) throw new Error(`${rotulo}: valor inválido (${String(n)})`);
+  if (v < 0) throw new Error(`${rotulo}: não pode ser negativo (${v})`);
+  if (v > VALOR_MAXIMO_PLAUSIVEL) throw new Error(`${rotulo}: valor implausível (${v}) — parece erro de leitura do relatório`);
+  return (Math.round(v * 100) / 100).toFixed(2).replace(".", ",");
+}
+function textoLivrePipe(v) {
+  return stripAccentsJs(String(v == null ? "" : v)).replace(/[|;\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+}
+// O Domínio recalcula o imposto como base x alíquota (arredondado em centavos). Com a alíquota em 2 casas, a
+// conta pode dar 1 centavo a mais ou a menos que o valor de fato retido (ex.: 64.141,75 x 9,45% = 6.061,40,
+// mas as quatro retenções somam 6.061,39 e o líquido da nota sai 1 centavo errado). Procura a base mais
+// próxima (poucos centavos) que reproduz exatamente o valor.
+function ajustarBaseParaValor(baseIdeal, aliquota, valor) {
+  const baseC = Math.round(baseIdeal * 100);
+  const valorC = Math.round(valor * 100);
+  const confere = (b) => Math.round((b * aliquota) / 100) === valorC;
+  if (confere(baseC)) return baseIdeal;
+  for (let d = 1; d <= 50; d++) {
+    if (confere(baseC - d)) return (baseC - d) / 100;
+    if (confere(baseC + d)) return (baseC + d) / 100;
+  }
+  return baseIdeal;
+}
+function buildNfsPadraoLines(linhas, avisos, cnpjEmpresa) {
+  const cnpjEmp = String(cnpjEmpresa || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
+  if (cnpjEmp.length !== 14) {
+    throw new Error("O registro 0000 do arquivo precisa do CNPJ da empresa, e ela não tem um CNPJ válido cadastrado. Use salvar_codigo_cnpj_empresa (ou peça o CNPJ ao usuário) antes de gerar.");
+  }
+  const saida = [`|0000|${cnpjEmp}|`];
+  linhas.forEach((l, index) => {
+    const n = index + 1;
+    const f = new Array(32).fill("");
+    f[0] = "3000";
+    f[1] = campoEstruturalTxt(l.especie, `código da espécie da linha ${n} (consta na nota, no Domínio; pergunte ao usuário na primeira vez)`, true);
+    f[2] = documentoTxt(l.cnpj, `CNPJ/CPF do cliente da linha ${n}`, true, avisos);
+    f[3] = campoEstruturalTxt(l.uf, `UF da linha ${n}`);
+    f[4] = campoEstruturalTxt(l.acumulador, `acumulador da linha ${n}`, true);
+    f[5] = campoEstruturalTxt(l.serie || "U", `série da linha ${n}`, true);
+    f[6] = campoEstruturalTxt(l.numeroDocumento, `número do documento da linha ${n}`, true);
+    f[9] = dataTxt(l.data, `data do serviço da linha ${n}`);
+    f[10] = l.dataEmissao ? dataTxt(l.dataEmissao, `data da emissão da linha ${n}`) : f[9];
+    const valorContabil = l.valorContabil ?? l.valorServicos;
+    f[11] = decPipe(valorContabil, `valor contábil da linha ${n}`, true);
+    f[12] = textoLivrePipe(l.observacao).slice(0, 250);
+    [["fatoGeradorCrf", 14], ["fatoGeradorIrrf", 15], ["fatoGeradorCosirf", 16], ["fatoGeradorIrrfp", 17]].forEach(([campo, pos]) => {
+      const v = String(l[campo] || "").trim().toUpperCase();
+      if (v && v !== "E" && v !== "P") throw new Error(`${campo} da linha ${n}: use E (emissão) ou P (pagamento)`);
+      f[pos] = v;
+    });
+    f[19] = campoEstruturalTxt(l.situacao ?? 0, `situação da linha ${n}`, true);
+    f[20] = campoEstruturalTxt(l.cfps, `CFPS da linha ${n}`, true);
+    f[28] = decPipe(l.valorServicos ?? valorContabil, `valor dos serviços da linha ${n}`, true);
+    f[29] = decPipe(l.valorDescontos || 0, `desconto da linha ${n}`);
+    saida.push(`|${f.join("|")}|`);
+    (Array.isArray(l.impostos) ? l.impostos : []).forEach((imp, k) => {
+      const rotulo = `imposto ${k + 1} da linha ${n}`;
+      const g = new Array(11).fill("");
+      g[0] = "3020";
+      g[1] = campoEstruturalTxt(imp && imp.codigo, `código do ${rotulo}`, true);
+      if (!/^\d+$/.test(g[1])) throw new Error(`${rotulo}: o código do imposto é numérico (16 IRRF, 38 COSIRF...)`);
+      const valor = Number(imp.valor);
+      if (!(valor > 0)) throw new Error(`${rotulo}: informe o valor do imposto (maior que zero)`);
+      const baseIdeal = imp.base != null && imp.base !== "" ? Number(imp.base) : Number(valorContabil);
+      if (!(baseIdeal > 0)) throw new Error(`${rotulo}: informe a base de cálculo`);
+      const aliquota = imp.aliquota != null && imp.aliquota !== ""
+        ? Math.round(Number(imp.aliquota) * 100) / 100
+        : Math.round((valor / baseIdeal) * 10000) / 100;
+      if (!(aliquota > 0 && aliquota <= 100)) {
+        throw new Error(`${rotulo}: a alíquota (${aliquota}%) ficou fora do possível (0 a 100%) — confira a base de cálculo e o valor do imposto`);
+      }
+      const base = ajustarBaseParaValor(baseIdeal, aliquota, valor);
+      if (Math.round(base * 100) !== Math.round(baseIdeal * 100)) {
+        avisos.push(`Linha ${n}, imposto ${g[1]}: base de cálculo ajustada de ${decPipe(baseIdeal, "base")} para ${decPipe(base, "base")} só para o Domínio, que recalcula base x alíquota, chegar exatamente em ${decPipe(valor, "valor")} (diferença de arredondamento).`);
+      }
+      g[2] = decPipe(imp.reducaoBase, `% de redução do ${rotulo}`);
+      g[3] = decPipe(base, `base do ${rotulo}`, true);
+      g[4] = decPipe(aliquota, `alíquota do ${rotulo}`, true);
+      g[5] = decPipe(valor, `valor do ${rotulo}`, true);
+      g[6] = decPipe(imp.isentas || 0, `isentas do ${rotulo}`);
+      g[7] = decPipe(imp.outras || 0, `outras do ${rotulo}`);
+      g[8] = decPipe(imp.valorContabil ?? valorContabil, `valor contábil do ${rotulo}`);
+      g[9] = textoLivrePipe(imp.codigoRecolhimento);
+      g[10] = textoLivrePipe(imp.naturezaRendimento);
+      saida.push(`|${g.join("|")}|`);
+    });
+  });
+  return saida;
+}
+
 // Ferramentas que a IA chama pra agir (tool use nativo da API). Antes eram "tags" escritas
 // no meio do texto e apagadas antes de salvar — relendo a conversa, a IA via as próprias
 // respostas dizendo "aqui está o arquivo" sem tag nenhuma e passava a imitar isso, e o arquivo
@@ -1104,8 +1212,8 @@ const FERRAMENTAS = [
       properties: {
         tipo: {
           type: "string",
-          enum: ["lanctos", "baixa_ent", "baixa_sai", "baixa_ser", "servico_prest"],
-          description: "lanctos = Lançamentos contábeis; baixa_ent = Baixa de Entradas; baixa_sai = Baixa de Saídas; baixa_ser = Baixa de Serviços; servico_prest = Nota Fiscal de Serviço",
+          enum: ["lanctos", "baixa_ent", "baixa_sai", "baixa_ser", "servico_prest", "nfs_padrao"],
+          description: "lanctos = Lançamentos contábeis; baixa_ent = Baixa de Entradas; baixa_sai = Baixa de Saídas; baixa_ser = Baixa de Serviços; servico_prest = Nota Fiscal de Serviço (layout simples); nfs_padrao = Nota Fiscal de Serviço no leiaute padrão com separador (único jeito de lançar o COSIRF, imposto 38)",
         },
         linhas: {
           type: "array",
@@ -1136,6 +1244,32 @@ const FERRAMENTAS = [
               cofins: { type: "number" },
               csll: { type: "number" },
               irrf: { type: "number" },
+              // nfs_padrao (usa também numeroDocumento, serie, data, acumulador, cfps, valorServicos, valorDescontos, valorContabil, situacao, cnpj e uf)
+              especie: { type: ["string", "integer"], description: "nfs_padrao: código da espécie da nota no Domínio (obrigatório; ex.: 67 em aluguel da MV)" },
+              dataEmissao: { type: "string" },
+              observacao: { type: "string" },
+              fatoGeradorCosirf: { type: "string", description: "nfs_padrao: E (emissão) ou P (pagamento); omita pra usar o do acumulador" },
+              fatoGeradorIrrf: { type: "string" },
+              fatoGeradorCrf: { type: "string" },
+              fatoGeradorIrrfp: { type: "string" },
+              impostos: {
+                type: "array",
+                description: "nfs_padrao: um item por imposto retido. Códigos: 16 IRRF, 22 PIS retido, 23 COFINS retido, 24 CSLL retido, 25 CRF, 26 INSS retido, 38 COSIRF, 39 IRRFP. Informe codigo e valor; a base (padrão: valor da nota) e a alíquota o sistema calcula.",
+                items: {
+                  type: "object",
+                  properties: {
+                    codigo: { type: ["string", "integer"] },
+                    valor: { type: "number" },
+                    base: { type: "number" },
+                    aliquota: { type: "number" },
+                    reducaoBase: { type: "number" },
+                    isentas: { type: "number" },
+                    outras: { type: "number" },
+                    codigoRecolhimento: { type: "string" },
+                    naturezaRendimento: { type: "string" },
+                  },
+                },
+              },
               // servico_prest
               razaoSocial: { type: "string" },
               uf: { type: "string" },
@@ -1303,7 +1437,7 @@ const FERRAMENTAS = [
     input_schema: {
       type: "object",
       properties: {
-        tipo: { type: "string", enum: ["lanctos", "baixa_ent", "baixa_sai", "baixa_ser", "servico_prest"], description: "Tipo do arquivo" },
+        tipo: { type: "string", enum: ["lanctos", "baixa_ent", "baixa_sai", "baixa_ser", "servico_prest", "nfs_padrao"], description: "Tipo do arquivo" },
       },
       required: ["tipo"],
     },
@@ -1352,6 +1486,7 @@ const TITULOS_ARQUIVO = {
   baixa_sai: "Baixa de Saídas",
   baixa_ser: "Baixa de Serviços",
   servico_prest: "Nota Fiscal de Serviço",
+  nfs_padrao: "Nota Fiscal de Serviço (leiaute padrão)",
 };
 
 // Monta o arquivo de verdade a partir dos dados da ferramenta gerar_arquivo. Retorna null se o
@@ -1366,6 +1501,7 @@ function buildArquivoGerado(spec) {
   else if (spec.tipo === "baixa_ent" || spec.tipo === "baixa_sai" || spec.tipo === "baixa_ser") {
     lines = buildBaixaLines(spec.linhas, spec.tipo, avisos);
   } else if (spec.tipo === "servico_prest") lines = buildServicoPrestLines(spec.linhas, avisos);
+  else if (spec.tipo === "nfs_padrao") lines = buildNfsPadraoLines(spec.linhas, avisos, spec.empresaCnpj);
   else return null;
 
   const content = lines.join("\r\n") + "\r\n";
@@ -1379,6 +1515,8 @@ function buildArquivoGerado(spec) {
     // exatamente o que vai pro Domínio. Não guardar as células aqui: seriam uma lista de
     // listas, que o Firestore recusa — e a resposta inteira deixava de ser gravada.
     colunas: COLUNAS_ARQUIVO[spec.tipo] || [],
+    // arquivo com registros separados por "|": a tela monta a conferência por registro, com os nomes do leiaute
+    ...(spec.tipo === "nfs_padrao" ? { formato: "pipe", layouts: NFS_PADRAO_LAYOUTS } : {}),
     avisos,
   };
 }
@@ -1396,7 +1534,7 @@ function chaveNomeEntidade(nome) {
 function linhasEmTabela(linhas) {
   const campos = [];
   for (const l of linhas) for (const k of Object.keys(l || {})) if (!campos.includes(k)) campos.push(k);
-  const valor = (v) => (v == null ? "" : String(v).replace(/[|\r\n]+/g, " ").trim());
+  const valor = (v) => (v == null ? "" : (typeof v === "object" ? JSON.stringify(v) : String(v)).replace(/[|\r\n]+/g, " ").trim());
   return [campos.join(" | "), ...linhas.map((l) => campos.map((k) => valor(l && l[k])).join(" | "))].join("\n");
 }
 // O estado salvo vai inteiro, a cada mensagem, no começo da mensagem atual — fora do cache, a preço
@@ -1727,7 +1865,7 @@ Quando o usuário escolher um (pelo número ou nome), na sua PRÓXIMA resposta c
 - Baixa de Entradas: {"tipo":"baixa_ent","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0}]}
 - Baixa de Saídas: {"tipo":"baixa_sai","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0,"pis":0,"cofins":0,"csll":0,"irrf":0}]} — se houver retençõesde impostos, mande os valores em pis, cofins, csll, irrf; senão deixe em 0.
 - Baixa de Serviços: {"tipo":"baixa_ser","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0,"pis":0,"cofins":0,"csll":0,"irrf":0}]} — se houver retenções de impostos na prestação de serviço, mande os valores; senão deixe em 0.
-- Nota Fiscal de Serviço: {"tipo":"servico_prest","linhas":[{"cnpj":"","numeroDocumento":"","serie":"U","data":"DD/MM/AAAA","situacao":0,"acumulador":1,"cfps":9101,"valorServicos":0,"valorDescontos":0,"valorContabil":0}]}
+- Nota Fiscal de Serviço: {"tipo":"servico_prest","linhas":[{"cnpj":"","numeroDocumento":"","serie":"U","data":"DD/MM/AAAA","situacao":0,"acumulador":1,"cfps":9101,"valorServicos":0,"valorDescontos":0,"valorContabil":0}]}. IMPOSTOS RETIDOS NA NF DE SERVIÇO: no layout simples (servico_prest) cada coluna de imposto (valorIrrf, valorPis, valorCofins, valorCsll, valorCrf, valorInss) é lançada pelo Domínio como o imposto de mesmo nome, e o sistema preenche a base de cálculo sozinho (sem ela o Domínio não grava). Esse layout NÃO consegue lançar o COSIRF (retenção combinada IRRF+PIS+COFINS+CSLL de órgão público): o valor da coluna do IRRF entra como IRRF, nunca como COSIRF. Quando o acumulador da nota for de COSIRF (ex.: "Receita de Aluguel com COSIRF"), use o tipo nfs_padrao (leiaute padrão com separador): uma linha por nota, com "especie" (código da espécie da nota no Domínio: pergunte ao usuário na primeira vez e salve com salvar_observacao, ex.: 67 pro aluguel da MV), os mesmos campos da nota e "impostos":[{"codigo":38,"valor":<soma das quatro retenções>}] (base = valor da nota e alíquota o sistema calcula; os valores individuais de IRRF/PIS/COFINS/CSLL não vão). Rendimento de aplicação com só IRRF continua no servico_prest com valorIrrf. O arquivo do nfs_padrao é importado em Utilitários > Importação > Importação Padrão > Leiaute Domínio Sistemas com Separador (não pelo Importador dos outros arquivos); avise isso ao usuário ao entregar. Códigos de imposto desse leiaute: 16 IRRF, 22 PIS retido, 23 COFINS retido, 24 CSLL retido, 25 CRF, 26 INSS retido, 38 COSIRF, 39 IRRFP.
   IDENTIFICAÇÃO DO CLIENTE: mande SÓ o CNPJ. Não preencha razão social, UF, município nem endereço — o cliente já existe no cadastro do Domínio e o CNPJ sozinho basta pra ele encontrar. Se esses campos forem preenchidos, o Domínio tenta validar/atualizar o cadastro do cliente e recusa o arquivo (ex.: "Município do cliente inválido"). É assim que as outras ferramentas do escritório (Bari, Mantovani) montam esse arquivo há tempos. Ou seja: nunca peça endereço, município ou razão social ao usuário pra montar uma nota — você não precisa desses dados.
   ACUMULADOR: nunca invente nem assuma o padrão (1). O acumulador muda por empresa e por tipo de serviço, e é ele que define a tributação da nota no Domínio. Se as observações da empresa já disserem qual usar naquele tipo de nota, use esse; se não disserem, PERGUNTE ao usuário qual acumulador usar antes de gerar o arquivo, e sugira guardar a resposta como observação permanente da empresa. Mesma coisa vale pro CFPS quando houver dúvida. NUNCA chute um número (nem 1, nem qualquer outro) só pra não perguntar.
   Campos opcionais de imposto dessa nota, use SÓ quando houver retenção de fato: "valorIrrf", "valorPis", "valorCofins", "valorCsll", "valorInss", "valorIssRetido", "aliquotaIss", "baseCalculo". Deixe de fora (nem inclua no JSON) os que não se aplicam — não preencha "baseCalculo" ou "aliquotaIss" só porque houve IRRF; eles são coisas diferentes (base de cálculo do ISS, não do IRRF) e normalmente ficam vazios mesmo quando há retenção de IRRF.
@@ -2444,6 +2582,7 @@ exports.assistenteChat = onCall(
       // A IA não precisa escrever o código da empresa em cada linha dos lançamentos: se a empresa
       // tem código cadastrado e a linha veio sem, o servidor preenche (menos tokens de saída).
       const codEmp = String(empresa.codigoDominio || "").replace(/\D/g, "");
+      if (spec && spec.tipo === "nfs_padrao") spec = { ...spec, empresaCnpj: empresa.cnpj };
       if (spec && spec.tipo === "lanctos" && Array.isArray(spec.linhas) && codEmp) {
         spec = { ...spec, linhas: spec.linhas.map((l) => (l && (l.codigoEmp == null || String(l.codigoEmp).trim() === "") ? { ...l, codigoEmp: codEmp } : l)) };
       }
