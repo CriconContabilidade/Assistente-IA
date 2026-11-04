@@ -1011,6 +1011,7 @@ const pedidoComArquivos = (message, files) => handler({
   const fixoTxt = chamadas[0].system[0].text;
   confere('configuração inicial e conciliação perguntam em lotes de 5 a 8 (não um por um)', /LOTES de 5 a 8 tipos por mensagem/.test(fixoTxt) && /pergunte em lotes de 5 a 8 tipos por mensagem/.test(fixoTxt) && !/pergunte um por um/.test(fixoTxt) && !/um de cada vez ou em pequenos grupos/.test(fixoTxt));
   confere('padrão confirmado é salvo na mesma resposta, sem "posso salvar?" em outra mensagem; correção usa substituir', /NA MESMA RESPOSTA/.test(fixoTxt) && /substituir=true/.test(fixoTxt) && !/pergunte se pode salvar \(nunca salve sozinho/.test(fixoTxt));
+  confere('NF de serviço: a IA sabe que o layout não lança COSIRF e que, com acumulador de COSIRF, a nota vai sem impostos retidos', /NÃO consegue lançar o COSIRF/.test(fixoTxt) && /SEM impostos retidos/.test(fixoTxt) && /destacado na nota, no Domínio/.test(fixoTxt));
   confere('buscar_arquivo só na rodada em que já vai gerar o arquivo (nunca com pergunta pendente)', /NUNCA chame buscar_arquivo pra montar um arquivo enquanto houver pergunta ou confirmação pendente/.test(fixoTxt));
 
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
