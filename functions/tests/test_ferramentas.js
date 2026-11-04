@@ -779,6 +779,21 @@ const pedidoComArquivos = (message, files) => handler({
   await pedidoComArquivos('segue', [medio]);
   confere('texto normal passa direto', chamadas.length === 1);
 
+  console.log('\n10o) abas escolhidas na tela: lista validada no servidor');
+  prepararEmpresa();
+  roteiro = [resp([txt('nao deveria chamar')], 'end_turn')];
+  let eAbas = null;
+  try { await pedidoComArquivos('segue', [{ ...arquivoPdf('rel.pdf', PDF_TEXTO), abas: 'Plan1' }]); } catch (e) { eAbas = e; }
+  confere('abas que não é lista é recusado', eAbas && eAbas.code === 'invalid-argument' && /abas/i.test(eAbas.message), eAbas && eAbas.message);
+  let eAbas2 = null;
+  try { await pedidoComArquivos('segue', [{ ...arquivoPdf('rel.pdf', PDF_TEXTO), abas: ['x'.repeat(101)] }]); } catch (e) { eAbas2 = e; }
+  confere('nome de aba gigante é recusado', eAbas2 && eAbas2.code === 'invalid-argument');
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('segue', [{ ...arquivoPdf('rel.pdf', PDF_TEXTO), abas: ['OUT26', 'SET26'] }]);
+  const docAbas = [...banco.entries()].find(([k]) => /documentos/.test(k) && !/conteudo/.test(k.split('documentos/')[1] || ''));
+  confere('lista válida passa e fica registrada no documento', docAbas && docAbas[1].arquivosInfo && docAbas[1].arquivosInfo[0].abas.join() === 'OUT26,SET26', docAbas && JSON.stringify(docAbas[1].arquivosInfo));
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [

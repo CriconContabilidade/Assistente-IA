@@ -40,7 +40,8 @@ const confere = (nome, ok, detalhe = '') => { if (!ok) falhas++; console.log(`${
   confere('a primeira aba vem; as últimas não', padrao.includes('--- Planilha: Mes1 ---') && !padrao.includes('--- Planilha: Mes120 ---'));
   confere('o aviso diz o total de abas, quais foram e quais ficaram de fora', /tem 120 abas/.test(padrao) && /Abas NÃO enviadas: Mes\d+/.test(padrao) && /e mais \d+/.test(padrao) && padrao.includes('"abas"'));
   const pedida = await m.exports.xlsxBufferToText(bufGrande, { abas: ['mes77', '3'] });
-  confere('aba pedida pelo nome (sem diferenciar maiúscula) ou número vem inteira, e só ela', pedida.includes('--- Planilha: Mes77 ---') && pedida.includes('--- Planilha: Mes3 ---') && !pedida.includes('--- Planilha: Mes1 ---') && !/Aviso do sistema/.test(pedida));
+  confere('aba pedida pelo nome (sem diferenciar maiúscula) ou número vem inteira, e só ela', pedida.includes('--- Planilha: Mes77 ---') && pedida.includes('--- Planilha: Mes3 ---') && !pedida.includes('--- Planilha: Mes1 ---'));
+  confere('mesmo com abas escolhidas, a IA é avisada de que existem outras (e que não deve inventar)', /tem 120 abas; só 2 foram enviadas \(Mes3, Mes77\)/.test(pedida) && /Abas NÃO enviadas: Mes1,/.test(pedida) && /Não invente dados/.test(pedida));
   const inexistente = await m.exports.xlsxBufferToText(bufGrande, { abas: ['nao existe'] });
   confere('aba que não existe devolve a lista de abas, sem erro', /Nenhuma aba com esse nome/.test(inexistente) && inexistente.includes('Mes120'));
   confere('planilha pequena não recebe aviso nenhum', !/Aviso do sistema/.test(texto));

@@ -556,6 +556,9 @@
   .pag-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
   .pag-card { border: 1px solid var(--panel-border); border-radius: 10px; padding: 8px; background: rgba(255,255,255,0.03); display: flex; flex-direction: column; gap: 6px; }
   .pag-card.fora { opacity: 0.45; border-style: dashed; }
+  .abas-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 6px; }
+  .abas-grid label { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; padding: 5px 8px; border: 1px solid var(--panel-border); border-radius: 8px; cursor: pointer; word-break: break-all; }
+  .abas-grid label.sel { border-color: var(--accent2); background: rgba(255,255,255,0.05); }
   .pag-card.suspeita { border-color: #e0a800; box-shadow: 0 0 0 1px #e0a800 inset; }
   .pag-etiqueta { font-size: 0.7rem; font-weight: 600; color: #b58900; background: rgba(224,168,0,0.15); border-radius: 6px; padding: 2px 6px; align-self: flex-start; }
   .pag-toolbar button.pag-btn-suspeitas { border-color: #e0a800; color: #b58900; }
@@ -1868,6 +1871,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const col = collection(db, "assistenteIA_empresas", activeEmpresaId, "fechamentos");
     unsubFechamento = onSnapshot(col, (snap) => {
       const maisRecente = snap.docs.reduce((acc, d) => (!acc || d.id > acc.id ? d : acc), null);
+      competenciaEmAndamento = maisRecente ? (maisRecente.data().competencia || null) : null;
       renderPainelFechamento(maisRecente ? maisRecente.data() : null);
     }, (err) => {
       console.error('Erro ouvindo fechamento:', err);
@@ -2141,6 +2145,61 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   // Mesmo critério do servidor: menos de 120 caracteres de texto. Só avisa; quem decide é a pessoa.
   const pdfSuspeitas = new Map();
   const PAG_POBRE_CHARS = 120;
+  // Planilhas .xlsx com muitas abas (uma por mês, durante anos) custavam centenas de milhares de tokens:
+  // lista as abas e deixa escolher quais vão pra IA. O arquivo inteiro continua indo e ficando guardado;
+  // só as abas marcadas são lidas agora, e a IA busca as outras sozinha se precisar.
+  const xlsxAbas = new Map(); // File -> { nomes: [...], marcadas: [bool] }
+  const XLSX_ABAS_PADRAO = 3;
+  const XLSX_ABAS_SEM_ESCOLHA = 6; // até isso, vai tudo e nem pergunta
+  let competenciaEmAndamento = null; // "MM/AAAA" da competência do painel de fechamento
+  const MESES_ABA = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  function mesDaAba(nome) {
+    const t = String(nome || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+    const m = t.match(/^([a-z]{3,})[^a-z0-9]*(\d{2}|\d{4})$/);
+    if (!m) return null;
+    const mes = MESES_ABA.indexOf(m[1].slice(0, 3));
+    if (mes < 0) return null;
+    return { mes: mes + 1, ano: m[2].length === 2 ? 2000 + Number(m[2]) : Number(m[2]) };
+  }
+  // padrão: a aba do mês em fechamento (OUT26 pra 10/2026); sem ela, as primeiras
+  function abasPadrao(nomes) {
+    const marcadas = nomes.map(() => false);
+    const comp = /^(\d{2})\/(\d{4})$/.exec(String(competenciaEmAndamento || ''));
+    if (comp) {
+      nomes.forEach((n, i) => {
+        const d = mesDaAba(n);
+        if (d && d.mes === Number(comp[1]) && d.ano === Number(comp[2])) marcadas[i] = true;
+      });
+    }
+    if (!marcadas.some(Boolean)) nomes.slice(0, XLSX_ABAS_PADRAO).forEach((_, i) => { marcadas[i] = true; });
+    return marcadas;
+  }
+  function decodificarXml(t) {
+    return String(t).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+      .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n))).replace(/&amp;/g, '&');
+  }
+  async function listarAbasXlsx(f) {
+    if (typeof JSZip === 'undefined') return null;
+    const zip = await JSZip.loadAsync(await f.arrayBuffer());
+    const wb = zip.file('xl/workbook.xml');
+    if (!wb) return null;
+    const xml = await wb.async('string');
+    return [...xml.matchAll(/<sheet\b[^>]*?\bname="([^"]*)"/g)].map((m) => decodificarXml(m[1]));
+  }
+  async function inspecionarXlsx(f) {
+    if (!/\.xlsx$/i.test(String(f.name || ''))) return;
+    try {
+      const nomes = await comTempoLimite(listarAbasXlsx(f), 30000);
+      if (nomes && nomes.length > XLSX_ABAS_SEM_ESCOLHA) xlsxAbas.set(f, { nomes, marcadas: abasPadrao(nomes) });
+    } catch (err) {
+      console.warn('Não consegui listar as abas da planilha:', err);
+    }
+  }
+  function abasParaEnvio(f) {
+    const sel = xlsxAbas.get(f);
+    if (!sel || sel.marcadas.every(Boolean)) return undefined;
+    return sel.nomes.filter((_, i) => sel.marcadas[i]);
+  }
   // Arquivos que ainda estão sendo analisados (senha, reenvio, páginas com imagem/pouco texto).
   // Enquanto algum anexo da mensagem estiver aqui, o envio fica bloqueado: o aviso de páginas
   // tem que chegar ANTES de o arquivo ir pra IA, não depois.
@@ -2374,12 +2433,13 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       await tratarDuplicados(lista.filter((f) => pendingFiles.includes(f)));
       novos = lista.filter((f) => pendingFiles.includes(f));
       await Promise.all(novos.map(inspecionarPdf));
+      await Promise.all(novos.map(inspecionarXlsx));
     } finally {
       aAnalisar.forEach((f) => arquivosEmAnalise.delete(f));
       renderAttachPreview();
     }
-    // com um único PDF com páginas suspeitas, já abre pra revisão
-    const comAviso = novos.filter((f) => pdfSuspeitas.has(f) && pendingFiles.includes(f));
+    // com um único arquivo pedindo revisão (PDF com páginas suspeitas ou planilha com muitas abas), já abre
+    const comAviso = novos.filter((f) => (pdfSuspeitas.has(f) || xlsxAbas.has(f)) && pendingFiles.includes(f));
     if (comAviso.length === 1) abrirPreviewAnexo(comAviso[0], pendingFiles.indexOf(comAviso[0]));
   }
   async function arquivoParaEnvio(f) {
@@ -2389,6 +2449,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       mediaType: f.type || 'application/octet-stream',
       base64: await fileToBase64(f),
       ...(s ? { senha: s.senha, lembrarSenha: s.lembrar } : {}),
+      ...(abasParaEnvio(f) ? { abas: abasParaEnvio(f) } : {}),
     };
   }
 
@@ -2543,6 +2604,61 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     };
   }
 
+  async function montarSeletorAbas(f, corpo, aplicarBtn) {
+    const info = xlsxAbas.get(f);
+    const n = info.nomes.length;
+    const marcadas = info.marcadas.slice();
+    corpo.textContent = '';
+    const toolbar = document.createElement('div');
+    toolbar.className = 'pag-toolbar';
+    const contador = document.createElement('span');
+    const btnPadrao = document.createElement('button');
+    btnPadrao.type = 'button'; btnPadrao.textContent = 'Voltar à sugestão';
+    const btnTodas = document.createElement('button');
+    btnTodas.type = 'button'; btnTodas.textContent = 'Marcar todas';
+    const btnNenhuma = document.createElement('button');
+    btnNenhuma.type = 'button'; btnNenhuma.textContent = 'Desmarcar todas';
+    toolbar.append(contador, btnPadrao, btnTodas, btnNenhuma);
+    const grade = document.createElement('div');
+    grade.className = 'abas-grid';
+    const aviso = document.createElement('div');
+    aviso.className = 'pag-aviso';
+    aviso.textContent = 'Só as abas marcadas vão pra IA nesta mensagem. O arquivo inteiro fica guardado: se a IA precisar de outra aba depois, ela busca sozinha. Cada aba costuma custar uns 1,5 mil tokens, então marque só o que a conferência pede.';
+    const muitas = document.createElement('div');
+    muitas.className = 'pag-aviso';
+    muitas.style.color = 'var(--danger)';
+    muitas.hidden = true;
+    muitas.textContent = 'Muitas abas marcadas: isso gasta bastante da sua cota de IA. Confira se precisa mesmo.';
+    corpo.append(toolbar, grade, aviso, muitas);
+    const caixas = [];
+    function atualizar() {
+      const qtd = marcadas.filter(Boolean).length;
+      contador.textContent = `${qtd} de ${n} aba(s) marcada(s)`;
+      caixas.forEach((c, k) => { c.checked = marcadas[k]; c.parentElement.classList.toggle('sel', marcadas[k]); });
+      aplicarBtn.disabled = qtd === 0;
+      aplicarBtn.textContent = qtd === n ? 'Enviar todas as abas' : `Enviar ${qtd} de ${n} aba(s)`;
+      muitas.hidden = qtd <= 10;
+    }
+    info.nomes.forEach((nome, k) => {
+      const rotulo = document.createElement('label');
+      const caixa = document.createElement('input');
+      caixa.type = 'checkbox';
+      caixa.addEventListener('change', () => { marcadas[k] = caixa.checked; atualizar(); });
+      rotulo.append(caixa, document.createTextNode(nome));
+      grade.appendChild(rotulo);
+      caixas.push(caixa);
+    });
+    btnPadrao.addEventListener('click', () => { abasPadrao(info.nomes).forEach((v, k) => { marcadas[k] = v; }); atualizar(); });
+    btnTodas.addEventListener('click', () => { marcadas.fill(true); atualizar(); });
+    btnNenhuma.addEventListener('click', () => { marcadas.fill(false); atualizar(); });
+    aplicarBtn.hidden = false;
+    atualizar();
+    return async function aplicarSelecao() {
+      info.marcadas = marcadas.slice();
+      renderAttachPreview();
+    };
+  }
+
   // Miniaturas e pré-visualização usam object URLs; guarda pra liberar a memória a cada redesenho.
   let miniaturasUrls = [];
   function abrirPreviewAnexo(f, indice) {
@@ -2575,6 +2691,9 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         frame.className = 'anexo-frame'; frame.src = url; frame.title = nome;
         corpo.appendChild(frame);
       });
+    } else if (xlsxAbas.has(f)) {
+      const aplicarBtn = document.getElementById('anexoAplicar');
+      montarSeletorAbas(f, corpo, aplicarBtn).then((fn) => { aplicarSelecaoPdf = fn; });
     } else if (tipo.startsWith('text/') || /\.(txt|csv|ofx)$/i.test(nome)) {
       const pre = document.createElement('pre');
       pre.className = 'anexo-texto'; pre.textContent = 'Carregando...';
@@ -2643,12 +2762,13 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       nomeBtn.className = 'attach-name';
       nomeBtn.title = 'Clique pra ver o arquivo antes de enviar';
       const reduzido = pdfOrigem.get(f);
+      const selAbas = xlsxAbas.get(f);
       nomeBtn.textContent = reduzido
         ? `${f.name} (${reduzido.marcadas.filter(Boolean).length} de ${reduzido.marcadas.length} págs)`
-        : f.name;
+        : (selAbas ? `${f.name} (${selAbas.marcadas.filter(Boolean).length} de ${selAbas.nomes.length} abas)` : f.name);
       nomeBtn.addEventListener('click', () => abrirPreviewAnexo(f, i));
       chip.append(nomeBtn, document.createTextNode(' '));
-      if (/\.xlsx?$/i.test(String(f.name || '')) && f.size > 300 * 1024) {
+      if (/\.xlsx?$/i.test(String(f.name || '')) && f.size > 300 * 1024 && !xlsxAbas.has(f)) {
         const grande = document.createElement('span');
         grande.className = 'attach-analisando';
         grande.textContent = '⚠️ planilha grande: só as primeiras abas vão pra IA';
@@ -2671,12 +2791,25 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         av.addEventListener('click', () => abrirPreviewAnexo(f, i));
         chip.append(av, document.createTextNode(' '));
       }
+      if (xlsxAbas.has(f) && !arquivosEmAnalise.has(f)) {
+        const sel = xlsxAbas.get(f);
+        const q = sel.marcadas.filter(Boolean).length;
+        const avA = document.createElement('button');
+        avA.type = 'button';
+        avA.className = 'attach-aviso';
+        avA.textContent = q === sel.nomes.length
+          ? `📑 todas as ${sel.nomes.length} abas vão pra IA (clique p/ escolher)`
+          : `📑 ${q} de ${sel.nomes.length} abas vão pra IA (clique p/ escolher)`;
+        avA.addEventListener('click', () => abrirPreviewAnexo(f, i));
+        chip.append(avA, document.createTextNode(' '));
+      }
       const remove = document.createElement('button');
       remove.type = 'button';
       remove.dataset.i = String(i);
       remove.textContent = '✕';
       remove.addEventListener('click', () => {
         pdfSuspeitas.delete((pdfOrigem.get(pendingFiles[i]) || {}).original || pendingFiles[i]);
+        xlsxAbas.delete(pendingFiles[i]);
         pdfOrigem.delete(pendingFiles[i]);
         pdfSenhas.delete(pendingFiles[i]);
         pendingFiles.splice(i, 1);
@@ -2769,6 +2902,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       pdfSenhas.clear();
       pdfProtegidos.clear();
       pdfSuspeitas.clear();
+      xlsxAbas.clear();
       renderAttachPreview();
 
       const result = await assistenteChat({
@@ -3200,6 +3334,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
      Mesmo parser/UI daquela ferramenta, só trocando a casca visual pro tema do Stagiario. ---------------- -->
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/pdf-lib.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
 <script>
 // As bibliotecas de PDF ficam na pasta vendor/ do próprio site (o CDN não resolve em algumas redes do
 // escritório). Se mesmo assim não carregarem, o app continua

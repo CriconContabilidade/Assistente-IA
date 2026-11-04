@@ -387,7 +387,7 @@ async function blocosDoArquivo(f, opcoes = {}) {
   }
   if (SPREADSHEET_MEDIA_TYPES.has(f.mediaType) || nomeMinusculo.endsWith(".xlsx")) {
     try {
-      const texto = await xlsxBufferToText(Buffer.from(f.base64, "base64"), { abas: opcoes.abas });
+      const texto = await xlsxBufferToText(Buffer.from(f.base64, "base64"), { abas: opcoes.abas || f.abas });
       return [{ type: "text", text: `--- Conteúdo de ${f.name} ---\n${texto}` }];
     } catch (err) {
       console.error(`Erro lendo planilha ${f.name}:`, err);
@@ -527,7 +527,7 @@ async function xlsxBufferToText(buffer, opcoes = {}) {
     usado += a.texto.length;
   }
   let texto = incluidas.map((a) => a.texto).join("\n");
-  const omitidas = candidatas.filter((a) => !incluidas.includes(a));
+  const omitidas = abas.filter((a) => !incluidas.includes(a));
   if (omitidas.length) {
     const nomes = omitidas.slice(0, 40).map((a) => a.nome).join(", ") + (omitidas.length > 40 ? ` e mais ${omitidas.length - 40}` : "");
     texto += `\n\n--- Aviso do sistema: esta planilha tem ${abas.length} abas; só ${incluidas.length} foram enviadas (${incluidas.map((a) => a.nome).join(", ")}) pra economizar. Abas NÃO enviadas: ${nomes}. Se precisar de outra aba, chame buscar_arquivo com o nome do arquivo e o campo "abas" (nomes das abas que precisa). Não invente dados das abas que não vieram. ---`;
@@ -1791,6 +1791,10 @@ exports.assistenteChat = onCall(
       if (f.senha != null && (typeof f.senha !== "string" || f.senha.length > 200)) {
         throw new HttpsError("invalid-argument", "Senha de PDF inválida.");
       }
+      // abas de planilha escolhidas na tela (só nomes, com limite de tamanho)
+      if (f.abas != null && (!Array.isArray(f.abas) || f.abas.length > 200 || f.abas.some((x) => typeof x !== "string" || x.length > 100))) {
+        throw new HttpsError("invalid-argument", "Lista de abas inválida.");
+      }
       totalBase64Chars += f.base64.length;
       if (totalBase64Chars > MAX_TOTAL_BASE64_CHARS) {
         throw new HttpsError("invalid-argument", "Os arquivos juntos são grandes demais.");
@@ -2597,6 +2601,7 @@ exports.assistenteChat = onCall(
               nome: f.name,
               tamanho: Buffer.from(f.base64, "base64").length,
               hash: createHash("sha256").update(Buffer.from(f.base64, "base64")).digest("hex"),
+              ...(Array.isArray(f.abas) && f.abas.length ? { abas: f.abas } : {}),
             })),
             resumo: text,
             // resposta curta (só pediu a senha, fez uma pergunta...) não resume o relatório: o
