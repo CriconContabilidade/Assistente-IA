@@ -2149,6 +2149,32 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   // mostrar o custo estimado antes de enviar e a cada página que se desmarca. Mesma conta do servidor:
   // 3,5 caracteres por token a US$ 2 por milhão (leitura sem cache).
   const pdfChars = new Map();
+  // Diário com mais de 2 meses (File original -> { meses, mantidos, ref: [bool por página] }): o servidor
+  // só lê os 2 últimos meses (referência do que já foi lançado). Aqui serve pra sugerir essas páginas
+  // no seletor e estimar o custo do que realmente vai.
+  const pdfDiario = new Map();
+  const DIARIO_MESES_REFERENCIA = 2;
+  const semAcentoMaiusc = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().trim();
+  const rotuloMesAaaaMm = (k) => `${k.slice(5, 7)}/${k.slice(0, 4)}`;
+  function mesDoTexto(texto) {
+    const cont = new Map();
+    for (const m of String(texto).matchAll(/\b\d{2}\/(\d{2})\/(\d{4})\b/g)) {
+      const k = `${m[2]}-${m[1]}`;
+      cont.set(k, (cont.get(k) || 0) + 1);
+    }
+    let melhor = null;
+    cont.forEach((n, k) => { if (!melhor || n > melhor[1]) melhor = [k, n]; });
+    return melhor ? melhor[0] : null;
+  }
+  function diarioDaLista(lista) {
+    if (!lista.ehDiario || !Array.isArray(lista.mesPorPagina)) return null;
+    let anterior = null;
+    const mesDe = lista.mesPorPagina.map((m) => { const v = m || anterior; anterior = v; return v; });
+    const meses = [...new Set(mesDe.filter(Boolean))].sort();
+    if (meses.length <= DIARIO_MESES_REFERENCIA) return null;
+    const mantidos = meses.slice(-DIARIO_MESES_REFERENCIA);
+    return { meses, mantidos, ref: mesDe.map((m) => mantidos.includes(m)) };
+  }
   const CHARS_MAX_SERVIDOR = 450000;   // acima disso o servidor recusa o PDF
   const PDF_CARO_USD = 0.10;
   const usdDeChars = (chars) => (chars / 3.5) * 2 / 1e6;
@@ -2159,6 +2185,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   function charsDoPdf(original, marcadas) {
     const arr = pdfChars.get(original);
     if (!arr) return null;
+    if (!marcadas && pdfDiario.has(original)) marcadas = pdfDiario.get(original).ref;
     return arr.reduce((t, c, i) => t + (!marcadas || marcadas[i] ? c : 0), 0);
   }
   function pdfCaro(f) {
@@ -2268,11 +2295,18 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const opsImagem = new Set([OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject].filter((x) => x !== undefined));
     const lista = [];
     const porPagina = [];
+    const mesesPag = [];
+    let ehDiario = false;
     for (let n = 1; n <= doc.numPages; n++) {
       const page = await doc.getPage(n);
       const tc = await page.getTextContent();
       const chars = tc.items.reduce((t, i) => t + String(i.str || '').trim().length, 0);
       porPagina.push(chars);
+      mesesPag.push(mesDoTexto(tc.items.map((i) => String(i.str || '')).join(' ')));
+      if (n === 1) {
+        const topo = tc.items.slice(0, 80).map((i) => semAcentoMaiusc(i.str));
+        ehDiario = topo.includes('DIARIO') && topo.some((x) => x.startsWith('PERIODO'));
+      }
       if (chars < PAG_POBRE_CHARS) {
         let imagem = false;
         try { imagem = (await page.getOperatorList()).fnArray.some((fn) => opsImagem.has(fn)); } catch (err) { /* sem a checagem de imagem, fica só "pouco texto" */ }
@@ -2281,6 +2315,8 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       if (page.cleanup) page.cleanup();
     }
     lista.charsPorPagina = porPagina;
+    lista.mesPorPagina = mesesPag;
+    lista.ehDiario = ehDiario;
     return lista;
   }
   function formatarPaginas(nums) {
@@ -2433,6 +2469,8 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       if (!doc.numPages || doc.numPages < 2) return;
       const lista = await suspeitasDoDoc(doc);
       pdfChars.set(f, lista.charsPorPagina);
+      const dj = diarioDaLista(lista);
+      if (dj) pdfDiario.set(f, dj);
       if (lista.length) pdfSuspeitas.set(f, lista);
     }
     try {
@@ -2498,9 +2536,11 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     toolbar.append(contador, btnTodas, btnNenhuma);
     let suspeitas = pdfSuspeitas.get(origem.original);
     if (!suspeitas && n >= 2) {
-      try { suspeitas = await suspeitasDoDoc(doc); pdfChars.set(origem.original, suspeitas.charsPorPagina); if (suspeitas.length) pdfSuspeitas.set(origem.original, suspeitas); } catch (err) { suspeitas = []; }
+      try { suspeitas = await suspeitasDoDoc(doc); pdfChars.set(origem.original, suspeitas.charsPorPagina); const djSel = diarioDaLista(suspeitas); if (djSel) pdfDiario.set(origem.original, djSel); if (suspeitas.length) pdfSuspeitas.set(origem.original, suspeitas); } catch (err) { suspeitas = []; }
     }
     suspeitas = suspeitas || [];
+    const diarioSel = pdfDiario.get(origem.original);
+    if (diarioSel && !(origem.marcadas && origem.marcadas.length === n)) diarioSel.ref.forEach((v, k) => { marcadas[k] = v; });
     const btnSuspeitas = document.createElement('button');
     btnSuspeitas.type = 'button';
     btnSuspeitas.className = 'pag-btn-suspeitas';
@@ -2510,7 +2550,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     grade.className = 'pag-grid';
     const aviso = document.createElement('div');
     aviso.className = 'pag-aviso';
-    aviso.textContent = 'Só as páginas marcadas vão pra IA e ficam guardadas no histórico deste relatório. Desmarque o que for realmente inútil (avisos legais, ouvidoria, páginas em branco); se tiver dúvida, deixe marcado.';
+    aviso.textContent = (diarioSel ? `Diário com ${diarioSel.meses.length} meses (${rotuloMesAaaaMm(diarioSel.meses[0])} a ${rotuloMesAaaaMm(diarioSel.meses[diarioSel.meses.length - 1])}): marquei só os ${DIARIO_MESES_REFERENCIA} últimos (${diarioSel.mantidos.map(rotuloMesAaaaMm).join(' e ')}), que servem de referência do que já foi lançado. Mesmo que você marque todos, a IA só lê esses ${DIARIO_MESES_REFERENCIA}; se precisar de outro mês ela busca sozinha. ` : '') + 'Só as páginas marcadas vão pra IA e ficam guardadas no histórico deste relatório. Desmarque o que for realmente inútil (avisos legais, ouvidoria, páginas em branco); se tiver dúvida, deixe marcado.';
     const grande = document.createElement('div');
     grande.className = 'pag-grande';
     grande.hidden = true;
@@ -2552,7 +2592,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       contador.style.color = charsMarcadas != null && charsMarcadas > CHARS_MAX_SERVIDOR ? 'var(--danger)' : '';
       cards.forEach((c, k) => c.classList.toggle('fora', !marcadas[k]));
       aplicarBtn.disabled = qtd === 0;
-      aplicarBtn.textContent = qtd === n ? (pdfOrigem.has(f) ? 'Voltar ao PDF inteiro' : 'Enviar o PDF inteiro') : `Enviar só ${qtd} de ${n} página(s)`;
+      aplicarBtn.textContent = qtd === n ? (pdfOrigem.has(f) ? 'Voltar ao PDF inteiro' : (diarioSel ? `Enviar o Diário inteiro (a IA lê só os ${DIARIO_MESES_REFERENCIA} últimos meses)` : 'Enviar o PDF inteiro')) : `Enviar só ${qtd} de ${n} página(s)`;
     }
     for (let k = 0; k < n; k++) {
       const card = document.createElement('div');
@@ -2807,6 +2847,15 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         an.textContent = '⏳ analisando as páginas...';
         chip.append(an, document.createTextNode(' '));
       }
+      const diarioChip = ehPdf(f) && !reduzido ? pdfDiario.get(f) : null;
+      if (diarioChip && !arquivosEmAnalise.has(f)) {
+        const dch = document.createElement('button');
+        dch.type = 'button';
+        dch.className = 'attach-aviso';
+        dch.textContent = `📚 Diário de ${diarioChip.meses.length} meses: só ${diarioChip.mantidos.map(rotuloMesAaaaMm).join(' e ')} vão pra IA (clique p/ ver)`;
+        dch.addEventListener('click', () => abrirPreviewAnexo(f, i));
+        chip.append(dch, document.createTextNode(' '));
+      }
       const origPdf = reduzido ? reduzido.original : f;
       const charsPdf = ehPdf(f) ? charsDoPdf(origPdf, reduzido ? reduzido.marcadas : null) : null;
       if (charsPdf != null && usdDeChars(charsPdf) >= 0.03 && !arquivosEmAnalise.has(f)) {
@@ -2850,6 +2899,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         pdfSuspeitas.delete((pdfOrigem.get(pendingFiles[i]) || {}).original || pendingFiles[i]);
         xlsxAbas.delete(pendingFiles[i]);
         pdfChars.delete((pdfOrigem.get(pendingFiles[i]) || {}).original || pendingFiles[i]);
+        pdfDiario.delete((pdfOrigem.get(pendingFiles[i]) || {}).original || pendingFiles[i]);
         pdfOrigem.delete(pendingFiles[i]);
         pdfSenhas.delete(pendingFiles[i]);
         pendingFiles.splice(i, 1);
@@ -2951,6 +3001,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       pdfProtegidos.clear();
       pdfSuspeitas.clear();
       pdfChars.clear();
+      pdfDiario.clear();
       xlsxAbas.clear();
       renderAttachPreview();
 

@@ -847,6 +847,38 @@ const pedidoComArquivos = (message, files) => handler({
   try { await pedidoComArquivos('segue', [arquivoPdf('escaneado.pdf', escaneadoLongo)]); } catch (e) { eEscan = e; }
   confere('PDF escaneado com mais de 30 páginas também é recusado (cada página cobra caro)', eEscan && eEscan.code === 'invalid-argument' && /31 páginas/.test(eEscan.message) && chamadas.length === 0, eEscan && eEscan.message);
 
+  console.log('\n10s) Diário com muitos meses: só os 2 últimos vão pra IA; os outros por buscar_arquivo (paginas)');
+  const cabDiarioT = (periodo) => txtPdf(30, 760, 'Empresa: TESTE LTDA | Folha: 0001') + txtPdf(30, 745, 'C.N.P.J.: 11.111.111/0001-11') + txtPdf(30, 730, 'Periodo: ' + periodo) + txtPdf(30, 715, 'DIARIO');
+  const nomesMesT = { '01': 'JAN', '02': 'FEV', '03': 'MAR', '04': 'ABR' };
+  const paginaDiarioT = (mes, n) => cabDiarioT('01/01/2026 - 30/04/2026') + Array.from({ length: 8 }, (_, i) => txtPdf(30, 695 - i * 14, `${String(10 + i).padStart(2, '0')}/${mes}/2026 | ${6000 + i} | 3.4.1.02.000 | Despesa | PGTO REF. LANC-${nomesMesT[mes]}-p${n} | 100,00`)).join('');
+  const paginasDiarioT = [];
+  for (const mes of ['01', '02', '03', '04']) for (let k = 1; k <= 3; k++) paginasDiarioT.push(paginaDiarioT(mes, paginasDiarioT.length + 1));
+  const diarioT4 = criarPdf(paginasDiarioT);
+  prepararEmpresa();
+  roteiro = [resp([txt('guardei')], 'end_turn')];
+  await pedidoComArquivos('segue o diário', [arquivoPdf('diario.pdf', diarioT4)]);
+  const blocoDiarioMeses = chamadas[0].messages[chamadas[0].messages.length - 1].content.find((b) => b.type === 'text' && b.text.includes('PDF convertido em texto'));
+  confere('Diário de 4 meses: só março e abril vão', blocoDiarioMeses && blocoDiarioMeses.text.includes('LANC-ABR') && blocoDiarioMeses.text.includes('LANC-MAR') && !blocoDiarioMeses.text.includes('LANC-JAN') && !blocoDiarioMeses.text.includes('LANC-FEV'), blocoDiarioMeses && blocoDiarioMeses.text.slice(0, 300));
+  confere('as páginas mantêm a numeração original (7 a 12)', blocoDiarioMeses && blocoDiarioMeses.text.includes('### Página 7') && blocoDiarioMeses.text.includes('### Página 12') && !blocoDiarioMeses.text.includes('### Página 6'));
+  confere('a IA é avisada: quantos meses, quais vieram, páginas e que não deve inventar', blocoDiarioMeses && /DIÁRIO com 4 meses \(01\/2026 a 04\/2026\): só os 2 últimos \(03\/2026 e 04\/2026\)/.test(blocoDiarioMeses.text) && /páginas 7 a 12 de 12/.test(blocoDiarioMeses.text) && /NÃO invente lançamentos/.test(blocoDiarioMeses.text));
+  chamadas.length = 0;
+  roteiro = [
+    resp([uso('buscar_arquivo', { nome: 'diario.pdf', paginas: ['1-2'] })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      const texto = Array.isArray(res.content) ? res.content.map((b) => b.text || '').join('\n') : String(res.content);
+      confere('buscar_arquivo com paginas devolve só as pedidas, de janeiro, com a numeração certa', texto.includes('LANC-JAN-p1') && texto.includes('LANC-JAN-p2') && !texto.includes('LANC-JAN-p3') && !texto.includes('LANC-MAR') && /só as páginas pedidas \(1, 2\) de 12/.test(texto) && !/DIÁRIO com/.test(texto), texto.slice(0, 300));
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('mostra janeiro do diario.pdf');
+  const diarioT2 = criarPdf(paginasDiarioT.slice(6));
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('segue o diário curto', [arquivoPdf('diario2.pdf', diarioT2)]);
+  const blocoDiario2m = chamadas[0].messages[chamadas[0].messages.length - 1].content.find((b) => b.type === 'text' && b.text.includes('PDF convertido em texto'));
+  confere('Diário com só 2 meses vai inteiro, sem aviso', blocoDiario2m && blocoDiario2m.text.includes('LANC-MAR-p7') && blocoDiario2m.text.includes('LANC-ABR-p12') && !/DIÁRIO com/.test(blocoDiario2m.text));
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [

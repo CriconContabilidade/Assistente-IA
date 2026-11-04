@@ -288,10 +288,54 @@ async function abrirPdfComSenhas(pdfjs, buffer, obterCandidatas) {
   return { doc: null, protegido: true, senha: null };
 }
 
-// Devolve { ok:true, paginas, total, protegido, senhaUsada } ou { ok:false, motivo, protegido }
-// (motivo: "senha" = protegido e nenhuma senha serviu; "imagem" = página escaneada/com imagem;
-// "grande"; "pouco").
-async function pdfParaTexto(buffer, obterCandidatas = async () => []) {
+// Diário (relatório do Domínio) com muitos meses: pra IA ele só serve de referência de como os últimos
+// meses já foram lançados. Vão só os DIARIO_MESES_REFERENCIA últimos meses do arquivo; um Diário de 9
+// meses (134 páginas, 182 mil tokens) passava de US$ 0,35 só pra ser lido. Se a IA precisar de outro
+// mês, pede as páginas com buscar_arquivo (campo "paginas").
+const DIARIO_MESES_REFERENCIA = 2;
+const PDF_MAX_CHARS_EXTRAIDOS = 2000000;   // teto de memória da extração; o teto de custo (450 mil) vem depois do recorte
+const PDF_MAX_PAGINAS_PEDIDAS = 60;
+const rotuloMes = (aaaaMm) => `${aaaaMm.slice(5, 7)}/${aaaaMm.slice(0, 4)}`;
+function mesDaPaginaDiario(linhas) {
+  const cont = new Map();
+  for (const l of linhas) {
+    for (const m of l.matchAll(/\b\d{2}\/(\d{2})\/(\d{4})\b/g)) {
+      const k = `${m[2]}-${m[1]}`;
+      cont.set(k, (cont.get(k) || 0) + 1);
+    }
+  }
+  let melhor = null;
+  for (const [k, n] of cont) if (!melhor || n > melhor[1]) melhor = [k, n];
+  return melhor ? melhor[0] : null;
+}
+function limitarDiario(paginas) {
+  const topo = (paginas[0] || []).slice(0, 12).map((l) => stripAccentsJs(l).toUpperCase().replace(/[\s|]+/g, " ").trim());
+  if (!(topo.some((l) => l === "DIARIO") && topo.some((l) => l.startsWith("PERIODO:")))) return null;
+  let anterior = null;
+  const mesDe = paginas.map((linhas) => { const m = mesDaPaginaDiario(linhas) || anterior; anterior = m; return m; });
+  const meses = [...new Set(mesDe.filter(Boolean))].sort();
+  if (meses.length <= DIARIO_MESES_REFERENCIA) return null;
+  const mantidos = meses.slice(-DIARIO_MESES_REFERENCIA);
+  const indices = mesDe.map((m, i) => (mantidos.includes(m) ? i : -1)).filter((i) => i >= 0);
+  return { indices, meses, mantidos };
+}
+// "123-134", 7 ou "7" viram números de página
+function listaDePaginas(entrada) {
+  const out = new Set();
+  for (const x of Array.isArray(entrada) ? entrada : []) {
+    const m = /^(\d{1,4})(?:\s*-\s*(\d{1,4}))?$/.exec(String(x).trim());
+    if (!m) continue;
+    const a = Number(m[1]);
+    const b = m[2] ? Number(m[2]) : a;
+    for (let n = Math.min(a, b); n <= Math.max(a, b) && out.size < 500; n++) out.add(n);
+  }
+  return [...out].sort((p, q) => p - q);
+}
+
+// Devolve { ok:true, paginas, numeros, total, protegido, senhaUsada, diario } ou { ok:false, motivo,
+// protegido } (motivo: "senha" = protegido e nenhuma senha serviu; "imagem" = página escaneada/com
+// imagem; "grande"; "pouco"; "paginas" = nenhuma das páginas pedidas existe).
+async function pdfParaTexto(buffer, obterCandidatas = async () => [], opcoesTexto = {}) {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   const aberto = await abrirPdfComSenhas(pdfjs, buffer, obterCandidatas);
   if (!aberto.doc) return { ok: false, motivo: "senha", protegido: true };
@@ -320,7 +364,7 @@ async function pdfParaTexto(buffer, obterCandidatas = async () => []) {
       total += linhas.join("\n").length;
       paginas.push(linhas);
       page.cleanup();
-      if (total > PDF_MAX_CHARS_TEXTO) return recusa("grande");
+      if (total > PDF_MAX_CHARS_EXTRAIDOS) return recusa("grande");
     }
     if (pobresComImagem.length / doc.numPages > PDF_MAX_FRACAO_POBRES) return recusa("imagem");
     if (total < PDF_MIN_CHARS_TOTAL) return recusa("pouco");
@@ -329,9 +373,27 @@ async function pdfParaTexto(buffer, obterCandidatas = async () => []) {
     for (const n of pobresComImagem) {
       paginas[n - 1].push(`[Página ${n}: pouco texto e contém imagem (capa, logotipo ou ilustração?). Se faltar algum dado, reabra com buscar_arquivo original=true]`);
     }
-    const semRepeticao = removerCabecalhosRepetidos(paginas);
+    // quais páginas seguem: as pedidas (buscar_arquivo), ou, num Diário de muitos meses, só os últimos
+    let escolhidas = paginas;
+    let numeros = paginas.map((_, i) => i + 1);
+    let diario = null;
+    const pedidas = Array.isArray(opcoesTexto.paginas) ? opcoesTexto.paginas : [];
+    if (pedidas.length) {
+      const idx = numeros.filter((n) => pedidas.includes(n)).slice(0, PDF_MAX_PAGINAS_PEDIDAS);
+      if (!idx.length) return recusa("paginas");
+      escolhidas = idx.map((n) => paginas[n - 1]);
+      numeros = idx;
+    } else {
+      diario = limitarDiario(paginas);
+      if (diario) {
+        escolhidas = diario.indices.map((i) => paginas[i]);
+        numeros = diario.indices.map((i) => i + 1);
+      }
+    }
+    const semRepeticao = removerCabecalhosRepetidos(escolhidas);
     const totalFinal = semRepeticao.paginas.reduce((t, linhas) => t + linhas.join("\n").length, 0);
-    return { ok: true, paginas: semRepeticao.paginas, total: totalFinal, cabecalhosRemovidos: semRepeticao.removidas, protegido: aberto.protegido, senhaUsada: aberto.senha };
+    if (totalFinal > PDF_MAX_CHARS_TEXTO) return recusa("grande");
+    return { ok: true, paginas: semRepeticao.paginas, numeros, diario, totalPaginasOriginal: doc.numPages, total: totalFinal, cabecalhosRemovidos: semRepeticao.removidas, protegido: aberto.protegido, senhaUsada: aberto.senha };
   } finally {
     await doc.destroy();
   }
@@ -349,7 +411,7 @@ async function blocosDoArquivo(f, opcoes = {}) {
     ];
     let r = null;
     try {
-      r = await pdfParaTexto(Buffer.from(f.base64, "base64"), obterCandidatas);
+      r = await pdfParaTexto(Buffer.from(f.base64, "base64"), obterCandidatas, { paginas: opcoes.paginas });
     } catch (err) {
       console.error(`Não consegui converter o PDF ${f.name} em texto, enviando o PDF original:`, err);
     }
@@ -358,12 +420,21 @@ async function blocosDoArquivo(f, opcoes = {}) {
     }
     if (r && r.ok && (!opcoes.original || r.protegido)) {
       console.log(`PDF ${f.name} enviado como texto (${r.paginas.length} página(s), ${r.total} caracteres${r.protegido ? ", protegido por senha" : ""})`);
-      const corpo = r.paginas.map((linhas, i) => `### Página ${i + 1}\n${linhas.join("\n")}`).join("\n\n");
+      const corpo = r.paginas.map((linhas, i) => `### Página ${r.numeros[i]}\n${linhas.join("\n")}`).join("\n\n");
+      const notaDiario = r.diario
+        ? `; DIÁRIO com ${r.diario.meses.length} meses (${rotuloMes(r.diario.meses[0])} a ${rotuloMes(r.diario.meses[r.diario.meses.length - 1])}): só os ${r.diario.mantidos.length} últimos (${r.diario.mantidos.map(rotuloMes).join(" e ")}) foram enviados, páginas ${r.numeros[0]} a ${r.numeros[r.numeros.length - 1]} de ${r.totalPaginasOriginal}, como referência de como os últimos meses já foram lançados. NÃO invente lançamentos dos meses que não vieram; se precisar de outro mês, use buscar_arquivo com o campo "paginas"`
+        : "";
+      const notaPaginas = Array.isArray(opcoes.paginas) && opcoes.paginas.length
+        ? `; só as páginas pedidas (${r.numeros.join(", ")}) de ${r.totalPaginasOriginal}`
+        : "";
       const aviso = opcoes.original && r.protegido ? " O PDF original não pode ser enviado porque tem senha; este é o texto extraído." : "";
       return [{
         type: "text",
-        text: `--- Conteúdo de ${f.name} (PDF convertido em texto pelo sistema: ${r.paginas.length} página(s); colunas separadas por " | "${r.cabecalhosRemovidos ? "; o cabeçalho que se repetia no topo das páginas seguintes foi omitido, vale o da primeira página" : ""}; imagens, logotipos e gráficos do PDF não vêm no texto — se precisar ver o visual, use buscar_arquivo com original=true)${aviso} ---\n\n${corpo}`,
+        text: `--- Conteúdo de ${f.name} (PDF convertido em texto pelo sistema: ${r.paginas.length} página(s); colunas separadas por " | "${r.cabecalhosRemovidos ? "; o cabeçalho que se repetia no topo das páginas seguintes foi omitido, vale o da primeira página" : ""}${notaDiario}${notaPaginas}; imagens, logotipos e gráficos do PDF não vêm no texto — se precisar ver o visual, use buscar_arquivo com original=true)${aviso} ---\n\n${corpo}`,
       }];
+    }
+    if (r && !r.ok && r.motivo === "paginas") {
+      return [{ type: "text", text: `--- ${f.name}: o PDF tem ${r.paginas} página(s) e nenhuma das pedidas existe. ---` }];
     }
     // PDF grande demais: antes caía pro PDF cru, que sai MAIS caro que o texto (um Diário de 134 páginas,
     // 182 mil tokens de texto, estourou o limite da empresa). Agora não vai: a mensagem é recusada e a
@@ -1048,6 +1119,7 @@ const FERRAMENTAS = [
         nome: { type: "string", description: "Nome do arquivo como aparece no histórico de relatórios" },
         original: { type: "boolean", description: "true = devolve o PDF original (com imagens) em vez do texto extraído. Só use se o texto não bastar; é bem mais caro." },
         abas: { type: "array", items: { type: "string" }, description: "Só para planilhas com várias abas: nomes das abas que você precisa ler (as outras não vêm, pra economizar). Sem isso vêm só as primeiras." },
+        paginas: { type: "array", items: { type: "string" }, description: "Só para PDFs grandes (ex.: um Diário de vários meses, do qual só os 2 últimos meses vêm por padrão): páginas que você precisa ler, como \"7\" ou \"1-15\" (no máximo 60). Sem isso vem o padrão." },
       },
       required: ["nome"],
     },
@@ -2324,7 +2396,8 @@ exports.assistenteChat = onCall(
           const pedido = String((entrada && entrada.nome) || "");
           const salvo = await carregarArquivoSalvo(db, empresaId, pedido);
           const abasPedidas = entrada && Array.isArray(entrada.abas) ? entrada.abas.map(String).slice(0, 20) : undefined;
-          const blocos = salvo ? await blocosDoArquivo(salvo, { ...opcoesPdf, original: !!(entrada && entrada.original), abas: abasPedidas }) : null;
+          const paginasPedidas = entrada ? listaDePaginas(entrada.paginas) : [];
+          const blocos = salvo ? await blocosDoArquivo(salvo, { ...opcoesPdf, original: !!(entrada && entrada.original), abas: abasPedidas, paginas: paginasPedidas }) : null;
           if (!blocos) {
             return {
               content: `Não encontrei "${pedido}" no acervo desta empresa. Responda com o que já tem; só peça ao usuário se for realmente indispensável.`,
