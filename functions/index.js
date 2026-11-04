@@ -1390,6 +1390,21 @@ async function registrarConsumoSeguro(empresaId, custoUsd, tokens) {
   }
 }
 
+// Estimativa (por baixo) de quanto custa só LER a mensagem nova, a preço cheio de entrada. Serve pra
+// recusar ANTES de gastar quando o que sobra do limite mensal não paga nem a leitura dos arquivos: o
+// limite só olhava o que já tinha sido gasto, e uma única mensagem grande passava de 5x o limite.
+function estimarEntradaUsd(blocos) {
+  let tokens = 0;
+  for (const b of blocos) {
+    if (b.type === "text") tokens += b.text.length / 3.5;
+    else if (b.source && typeof b.source.data === "string") {
+      const bytes = b.source.data.length * 0.75;
+      tokens += bytes / (b.type === "document" ? 60 : 100);
+    }
+  }
+  return (tokens * 2) / 1e6;
+}
+
 function buildSystemPrompt(empresaNome, notas, documentos, cadastro) {
   // Código e CNPJ vêm do cadastro da empresa, preenchido na criação. Quando estão aqui a IA
   // não precisa perguntar nem procurar no banco compartilhado.
@@ -1628,6 +1643,7 @@ exports.assistenteChat = onCall(
     // Limite mensal de consumo da empresa: bate no custo estimado já gravado no mês. Passou do
     // limite, a IA não responde mais até o admin aumentar o limite ou o mês virar. Usa
     // "failed-precondition" (e não "resource-exhausted", que a tela trata como IA sem crédito).
+    let folgaConsumo = null;   // o que ainda sobra de limite (US$), pra conferir contra o tamanho da mensagem
     {
       const consumoSnap = await empresaRef0(empresaId).collection("consumo").doc(mesConsumo()).get();
       const custoMes = consumoSnap.exists ? (consumoSnap.data().custoUsd || 0) : 0;
@@ -1652,6 +1668,7 @@ exports.assistenteChat = onCall(
           { motivo: "limite_empresa" }
         );
       }
+      folgaConsumo = { empresa: limiteMes - custoMes, geral: limiteGeral - custoGeral };
     }
 
     // Trava de idempotência: se o navegador chamar de novo com o MESMO requestId (retry depois
@@ -1844,6 +1861,19 @@ exports.assistenteChat = onCall(
         "invalid-argument",
         `Os arquivos desta mensagem são grandes demais (cerca de ${Math.round(charsDaMensagem / 3.5 / 1000)} mil tokens, uns US$ ${(charsDaMensagem / 3.5 * 2 / 1e6).toFixed(2)} só pra ler). Envie menos arquivos por vez ou reduza o tamanho (páginas do PDF, abas da planilha).`
       );
+    }
+    // O que sobra do limite tem que pagar pelo menos a leitura dos arquivos desta mensagem.
+    const entradaEstimadaUsd = estimarEntradaUsd(contentBlocks);
+    if (folgaConsumo) {
+      const folga = Math.min(folgaConsumo.empresa, folgaConsumo.geral);
+      if (entradaEstimadaUsd > folga) {
+        const daEmpresa = folgaConsumo.empresa <= folgaConsumo.geral;
+        throw new HttpsError(
+          "failed-precondition",
+          `Esta mensagem custaria cerca de US$ ${entradaEstimadaUsd.toFixed(2)} só pra IA ler os arquivos, e o limite que sobra ${daEmpresa ? "desta empresa" : "do escritório"} neste mês é US$ ${Math.max(0, folga).toFixed(2)}. Envie menos arquivos (ou menos abas e páginas) ou peça a um administrador para aumentar o limite.`,
+          { motivo: daEmpresa ? "limite_empresa" : "limite_geral" }
+        );
+      }
     }
     log(`conteúdo montado (${contentBlocks.length} blocos)`);
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY.value() });

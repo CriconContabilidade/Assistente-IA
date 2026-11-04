@@ -81,7 +81,7 @@ const uso = (name, input) => ({ type: 'tool_use', id: `toolu_${++idSeq}`, name, 
 const resp = (content, stop_reason) => ({ content, stop_reason, usage: { input_tokens: 10, output_tokens: 5 } });
 
 // ---------- troca dos módulos ----------
-class HttpsError extends Error { constructor(code, msg) { super(msg); this.code = code; } }
+class HttpsError extends Error { constructor(code, msg, details) { super(msg); this.code = code; this.details = details; } }
 const falsos = {
   'firebase-functions/v2/https': { onCall: (opts, fn) => fn, HttpsError },
   'firebase-functions/params': { defineSecret: () => ({ value: () => 'chave-falsa' }) },
@@ -811,6 +811,25 @@ const pedidoComArquivos = (message, files) => handler({
   confere('arquivo com mais de 3 dias vira só um resumo (sem as linhas)', !ctxEstado.includes('LINHA VELHA UNICA') && !ctxEstado.includes('11111,11') && /ÚLTIMO ARQUIVO lanctos \(lanctos\.txt\): 1 linha/.test(ctxEstado), ctxEstado.slice(0, 400));
   confere('arquivo de hoje continua com as linhas (pra poder corrigir)', ctxEstado.includes('52998224725') && ctxEstado.includes('22222.22'));
   confere('o resumo do arquivo antigo diz o que fazer se pedirem correção', /peça o relatório de novo/.test(ctxEstado));
+
+  console.log('\n10q) limite: o que sobra tem que pagar pelo menos a leitura dos arquivos da mensagem');
+  prepararEmpresa();
+  const mesLim = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).slice(0, 7);
+  banco.set(`assistenteIA_empresas/mv/consumo/${mesLim}`, { custoUsd: 0.15, chamadas: 3 });   // limite padrão da MV é US$ 0,20: sobram US$ 0,05
+  roteiro = [resp([txt('nao deveria chamar')], 'end_turn')];
+  const txtGrande = { name: 'grande.txt', mediaType: 'text/plain', base64: Buffer.from('linha de relatorio com valores 123,45 '.repeat(4000)).toString('base64') };   // ~44 mil tokens, uns US$ 0,09
+  let eLim = null;
+  try { await pedidoComArquivos('segue', [txtGrande]); } catch (e) { eLim = e; }
+  confere('arquivo que custaria mais do que sobra do limite é recusado antes de gastar', eLim && eLim.code === 'failed-precondition' && /custaria cerca de US\$ 0\.\d\d/.test(eLim.message) && /limite que sobra desta empresa/.test(eLim.message) && chamadas.length === 0, eLim && eLim.message);
+  confere('a recusa usa o mesmo motivo do limite da empresa (a tela mostra a mensagem)', eLim && eLim.details && eLim.details.motivo === 'limite_empresa', eLim && JSON.stringify(eLim.details));
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  const txtPequeno = { name: 'pequeno.txt', mediaType: 'text/plain', base64: Buffer.from('linha de relatorio com valores 123,45 '.repeat(100)).toString('base64') };
+  await pedidoComArquivos('segue', [txtPequeno]);
+  confere('arquivo pequeno passa mesmo com pouco limite sobrando', chamadas.length === 1);
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedidoComArquivos('segue', [txtGrande]);
+  confere('sem consumo no mês, o mesmo arquivo grande passa (limite cheio)', chamadas.length === 1);
 
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
