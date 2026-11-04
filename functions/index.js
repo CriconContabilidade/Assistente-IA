@@ -1117,21 +1117,6 @@ function decPipe(n, rotulo, obrigatorio = false) {
 function textoLivrePipe(v) {
   return stripAccentsJs(String(v == null ? "" : v)).replace(/[|;\r\n]+/g, " ").replace(/\s+/g, " ").trim();
 }
-// O Domínio recalcula o imposto como base x alíquota (arredondado em centavos). Com a alíquota em 2 casas, a
-// conta pode dar 1 centavo a mais ou a menos que o valor de fato retido (ex.: 64.141,75 x 9,45% = 6.061,40,
-// mas as quatro retenções somam 6.061,39 e o líquido da nota sai 1 centavo errado). Procura a base mais
-// próxima (poucos centavos) que reproduz exatamente o valor.
-function ajustarBaseParaValor(baseIdeal, aliquota, valor) {
-  const baseC = Math.round(baseIdeal * 100);
-  const valorC = Math.round(valor * 100);
-  const confere = (b) => Math.round((b * aliquota) / 100) === valorC;
-  if (confere(baseC)) return baseIdeal;
-  for (let d = 1; d <= 50; d++) {
-    if (confere(baseC - d)) return (baseC - d) / 100;
-    if (confere(baseC + d)) return (baseC + d) / 100;
-  }
-  return baseIdeal;
-}
 function buildNfsPadraoLines(linhas, avisos, cnpjEmpresa) {
   const cnpjEmp = String(cnpjEmpresa || "").toUpperCase().replace(/[^0-9A-Z]/g, "");
   if (cnpjEmp.length !== 14) {
@@ -1179,10 +1164,10 @@ function buildNfsPadraoLines(linhas, avisos, cnpjEmpresa) {
       if (!(aliquota > 0 && aliquota <= 100)) {
         throw new Error(`${rotulo}: a alíquota (${aliquota}%) ficou fora do possível (0 a 100%) — confira a base de cálculo e o valor do imposto`);
       }
-      const base = ajustarBaseParaValor(baseIdeal, aliquota, valor);
-      if (Math.round(base * 100) !== Math.round(baseIdeal * 100)) {
-        avisos.push(`Linha ${n}, imposto ${g[1]}: base de cálculo ajustada de ${decPipe(baseIdeal, "base")} para ${decPipe(base, "base")} só para o Domínio, que recalcula base x alíquota, chegar exatamente em ${decPipe(valor, "valor")} (diferença de arredondamento).`);
-      }
+      // O Domínio recalcula o COSIRF sozinho (alíquota do acumulador x valor da nota) e ignora a base e o valor
+      // daqui: na MV, 64.141,75 x 9,45% deu 6.061,40 mesmo com o arquivo trazendo 6.061,39 e a base ajustada.
+      // Então a base segue verdadeira; a diferença de centavo se resolve na baixa.
+      const base = baseIdeal;
       g[2] = decPipe(imp.reducaoBase, `% de redução do ${rotulo}`);
       g[3] = decPipe(base, `base do ${rotulo}`, true);
       g[4] = decPipe(aliquota, `alíquota do ${rotulo}`, true);
@@ -1865,7 +1850,7 @@ Quando o usuário escolher um (pelo número ou nome), na sua PRÓXIMA resposta c
 - Baixa de Entradas: {"tipo":"baixa_ent","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0}]}
 - Baixa de Saídas: {"tipo":"baixa_sai","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0,"pis":0,"cofins":0,"csll":0,"irrf":0}]} — se houver retençõesde impostos, mande os valores em pis, cofins, csll, irrf; senão deixe em 0.
 - Baixa de Serviços: {"tipo":"baixa_ser","linhas":[{"numero":"","cnpj":"","vencimento":"DD/MM/AAAA","databaixa":"DD/MM/AAAA","valor":0,"juros":0,"multa":0,"desconto":0,"pis":0,"cofins":0,"csll":0,"irrf":0}]} — se houver retenções de impostos na prestação de serviço, mande os valores; senão deixe em 0.
-- Nota Fiscal de Serviço: {"tipo":"servico_prest","linhas":[{"cnpj":"","numeroDocumento":"","serie":"U","data":"DD/MM/AAAA","situacao":0,"acumulador":1,"cfps":9101,"valorServicos":0,"valorDescontos":0,"valorContabil":0}]}. IMPOSTOS RETIDOS NA NF DE SERVIÇO: no layout simples (servico_prest) cada coluna de imposto (valorIrrf, valorPis, valorCofins, valorCsll, valorCrf, valorInss) é lançada pelo Domínio como o imposto de mesmo nome, e o sistema preenche a base de cálculo sozinho (sem ela o Domínio não grava). Esse layout NÃO consegue lançar o COSIRF (retenção combinada IRRF+PIS+COFINS+CSLL de órgão público): o valor da coluna do IRRF entra como IRRF, nunca como COSIRF. Quando o acumulador da nota for de COSIRF (ex.: "Receita de Aluguel com COSIRF"), use o tipo nfs_padrao (leiaute padrão com separador): uma linha por nota, com "especie" (código da espécie da nota no Domínio: pergunte ao usuário na primeira vez e salve com salvar_observacao, ex.: 67 pro aluguel da MV), os mesmos campos da nota e "impostos":[{"codigo":38,"valor":<soma das quatro retenções>}] (base = valor da nota e alíquota o sistema calcula; os valores individuais de IRRF/PIS/COFINS/CSLL não vão). Rendimento de aplicação com só IRRF continua no servico_prest com valorIrrf. O arquivo do nfs_padrao é importado em Utilitários > Importação > Importação Padrão > Leiaute Domínio Sistemas com Separador (não pelo Importador dos outros arquivos); avise isso ao usuário ao entregar. Códigos de imposto desse leiaute: 16 IRRF, 22 PIS retido, 23 COFINS retido, 24 CSLL retido, 25 CRF, 26 INSS retido, 38 COSIRF, 39 IRRFP.
+- Nota Fiscal de Serviço: {"tipo":"servico_prest","linhas":[{"cnpj":"","numeroDocumento":"","serie":"U","data":"DD/MM/AAAA","situacao":0,"acumulador":1,"cfps":9101,"valorServicos":0,"valorDescontos":0,"valorContabil":0}]}. IMPOSTOS RETIDOS NA NF DE SERVIÇO: no layout simples (servico_prest) cada coluna de imposto (valorIrrf, valorPis, valorCofins, valorCsll, valorCrf, valorInss) é lançada pelo Domínio como o imposto de mesmo nome, e o sistema preenche a base de cálculo sozinho (sem ela o Domínio não grava). Esse layout NÃO consegue lançar o COSIRF (retenção combinada IRRF+PIS+COFINS+CSLL de órgão público): o valor da coluna do IRRF entra como IRRF, nunca como COSIRF. Quando o acumulador da nota for de COSIRF (ex.: "Receita de Aluguel com COSIRF"), use o tipo nfs_padrao (leiaute padrão com separador): uma linha por nota, com "especie" (código da espécie da nota no Domínio: pergunte ao usuário na primeira vez e salve com salvar_observacao, ex.: 67 pro aluguel da MV), os mesmos campos da nota e "impostos":[{"codigo":38,"valor":<soma das quatro retenções>}] (base = valor da nota e alíquota o sistema calcula; os valores individuais de IRRF/PIS/COFINS/CSLL não vão). ATENÇÃO: o Domínio recalcula o COSIRF sozinho pela alíquota do acumulador (ex.: 9,45% de 64.141,75 = 6.061,40) e pode diferir em 1 centavo do que o órgão de fato reteve (6.061,39); o arquivo não consegue forçar o centavo. Ao dar a baixa dessa nota, o centavo de diferença do líquido vai em juros (ou desconto), sem perguntar nada de novo ao usuário. Rendimento de aplicação com só IRRF continua no servico_prest com valorIrrf. O arquivo do nfs_padrao é importado em Utilitários > Importação > Importação Padrão > Leiaute Domínio Sistemas com Separador (não pelo Importador dos outros arquivos); avise isso ao usuário ao entregar. Códigos de imposto desse leiaute: 16 IRRF, 22 PIS retido, 23 COFINS retido, 24 CSLL retido, 25 CRF, 26 INSS retido, 38 COSIRF, 39 IRRFP.
   IDENTIFICAÇÃO DO CLIENTE: mande SÓ o CNPJ. Não preencha razão social, UF, município nem endereço — o cliente já existe no cadastro do Domínio e o CNPJ sozinho basta pra ele encontrar. Se esses campos forem preenchidos, o Domínio tenta validar/atualizar o cadastro do cliente e recusa o arquivo (ex.: "Município do cliente inválido"). É assim que as outras ferramentas do escritório (Bari, Mantovani) montam esse arquivo há tempos. Ou seja: nunca peça endereço, município ou razão social ao usuário pra montar uma nota — você não precisa desses dados.
   ACUMULADOR: nunca invente nem assuma o padrão (1). O acumulador muda por empresa e por tipo de serviço, e é ele que define a tributação da nota no Domínio. Se as observações da empresa já disserem qual usar naquele tipo de nota, use esse; se não disserem, PERGUNTE ao usuário qual acumulador usar antes de gerar o arquivo, e sugira guardar a resposta como observação permanente da empresa. Mesma coisa vale pro CFPS quando houver dúvida. NUNCA chute um número (nem 1, nem qualquer outro) só pra não perguntar.
   Campos opcionais de imposto dessa nota, use SÓ quando houver retenção de fato: "valorIrrf", "valorPis", "valorCofins", "valorCsll", "valorInss", "valorIssRetido", "aliquotaIss", "baseCalculo". Deixe de fora (nem inclua no JSON) os que não se aplicam — não preencha "baseCalculo" ou "aliquotaIss" só porque houve IRRF; eles são coisas diferentes (base de cálculo do ISS, não do IRRF) e normalmente ficam vazios mesmo quando há retenção de IRRF.

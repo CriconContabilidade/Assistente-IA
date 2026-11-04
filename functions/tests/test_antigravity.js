@@ -101,9 +101,9 @@ const linhasPipe = (arq) => Buffer.from(arq.base64, 'base64').toString('latin1')
 let lp = r.arq && linhasPipe(r.arq);
 confere('arquivo com 3 registros: 0000, 3000 e 3020', lp && lp.length === 3 && lp[0] === '|0000|21208224000163|' && lp[1].startsWith('|3000|') && lp[2].startsWith('|3020|'), lp && JSON.stringify(lp));
 confere('registro 3000 idêntico ao arquivo que o Domínio da MV aceitou (32 campos)', lp && lp[1] === '|3000|67|26989715002903||1|U|153|||31/10/2026|31/10/2026|64141,75||||||||0|9101||||||||64141,75|0,00|||' && lp[1].split('|').length === 34, lp && lp[1]);
-confere('registro 3020 do COSIRF (38) com 11 campos, alíquota 9,45 e valor 6.061,39', lp && lp[2].startsWith('|3020|38||') && lp[2].split('|').length === 13 && lp[2].includes('|9,45|6061,39|0,00|0,00|64141,75|'), lp && lp[2]);
-confere('base ajustada em 1 centavo (64141,74) pro Domínio recalcular exatamente 6.061,39 (ele dava 6.061,40 e o líquido saía 1 centavo errado)', lp && lp[2].startsWith('|3020|38||64141,74|9,45|6061,39|') && Math.round(6414174 * 9.45 / 100) === 606139, lp && lp[2]);
-confere('o ajuste da base é avisado', r.arq && r.arq.avisos.some((a) => /base de cálculo ajustada de 64141,75 para 64141,74/.test(a)), r.arq && JSON.stringify(r.arq.avisos));
+confere('registro 3020 do COSIRF (38) com 11 campos, base = valor da nota, alíquota 9,45 e valor 6.061,39', lp && lp[2] === '|3020|38||64141,75|9,45|6061,39|0,00|0,00|64141,75|||' && lp[2].split('|').length === 13, lp && lp[2]);
+confere('a base NÃO é mexida (o Domínio ignora base e valor do 3020 e recalcula o COSIRF sozinho: ajustar não adiantou na MV)', lp && lp[2].includes('|64141,75|9,45|6061,39|'));
+confere('nenhum aviso de ajuste', r.arq && r.arq.avisos.length === 0, r.arq && JSON.stringify(r.arq.avisos));
 confere('metadados pra tela montar a conferência por registro', r.arq && r.arq.formato === 'pipe' && r.arq.layouts['3000'].length === 32 && r.arq.layouts['3020'].length === 11 && r.arq.nome === 'NFS_Dominio_Padrao.txt');
 confere('quebra de linha do Windows e sem acento', r.arq && Buffer.from(r.arq.base64, 'base64').toString('latin1').endsWith('|\r\n'));
 r = gera({ ...nfsPadrao, linhas: [{ ...nfsPadrao.linhas[0], impostos: [{ codigo: 16, valor: 10, base: 100 }] }] });
