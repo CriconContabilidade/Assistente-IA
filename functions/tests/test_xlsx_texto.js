@@ -46,6 +46,14 @@ const confere = (nome, ok, detalhe = '') => { if (!ok) falhas++; console.log(`${
   confere('aba que não existe devolve a lista de abas, sem erro', /Nenhuma aba com esse nome/.test(inexistente) && inexistente.includes('Mes120'));
   confere('planilha pequena não recebe aviso nenhum', !/Aviso do sistema/.test(texto));
 
+
+  // números sem ruído de ponto flutuante (menos tokens, mesmo valor pra um lançamento)
+  const wbNum = new ExcelJS.Workbook();
+  wbNum.addWorksheet('N').addRow([1234.5678901234567, 0.09250000000000001, 93.1, 1500, 0.000123456789, -7.123456789, 2.675]);
+  const textoNum = await m.exports.xlsxBufferToText(Buffer.from(await wbNum.xlsx.writeBuffer()));
+  const linhaNum = textoNum.split('\n')[1];
+  confere('ruído de ponto flutuante some, valor útil fica', linhaNum === '1234.5679\t0.0925\t93.1\t1500\t0.000123457\t-7.1235\t2.675', JSON.stringify(linhaNum));
+
   console.log(falhas === 0 ? '\nTUDO OK' : `\n${falhas} FALHA(S)`);
   process.exit(falhas ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

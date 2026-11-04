@@ -572,6 +572,11 @@ function cellToString(v) {
     if (Array.isArray(v.richText)) return v.richText.map((t) => t.text).join("");
     return "";
   }
+  if (typeof v === "number" && Number.isFinite(v) && !Number.isInteger(v)) {
+    // ruído de ponto flutuante (1234.5678901234567, 0.09250000000000001) só gasta token: valor contábil não
+    // precisa disso. Acima de 1, 4 casas; abaixo de 1 (taxas, percentuais), 6 algarismos significativos.
+    return String(Math.abs(v) >= 1 ? Number(v.toFixed(4)) : Number(v.toPrecision(6)));
+  }
   return String(v);
 }
 
