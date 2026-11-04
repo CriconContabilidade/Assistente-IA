@@ -1039,7 +1039,21 @@ function buildBaixaLines(linhas, tipo, avisos) {
 }
 
 function buildServicoPrestLines(linhas, avisos) {
-  return linhas.map((l, index) => [
+  return linhas.map((l, index) => {
+    // Nota com imposto retido (IRRF, PIS, COFINS, CSLL, CRF, INSS) e SEM base de cálculo: o Domínio calcula a
+    // alíquota dividindo o imposto por uma base zerada e, com imposto acima de uns R$ 10, estoura a coluna
+    // ("Value 2287 out of range", visto na MV: IRRF 22,87 virou alíquota 2287%) — a gravação falha e nada
+    // é salvo. Sem ISS na nota, a base é o próprio valor da nota. Com ISS, quem informa a base é a IA.
+    const positivo = (v) => Number(v) > 0;
+    const temRetido = [l.valorIrrf, l.valorPis, l.valorCofins, l.valorCsll, l.valorCrf, l.valorInss].some(positivo);
+    const temIss = [l.valorIssNormal, l.valorIssRetido, l.aliquotaIss].some(positivo);
+    const semBase = l.baseCalculo == null || l.baseCalculo === "" || Number(l.baseCalculo) === 0;
+    let baseEfetiva = l.baseCalculo;
+    if (temRetido && semBase) {
+      if (!temIss) baseEfetiva = l.valorContabil ?? l.valorServicos;
+      else avisos.push(`Linha ${index + 1}: nota com ISS e imposto retido sem base de cálculo — o Domínio pode recusar ao gravar (alíquota fora do limite). Informe a base de cálculo.`);
+    }
+    return [
     documentoTxt(l.cnpj, `CNPJ/CPF da linha ${index + 1}`, true, avisos),
     // Razão social, UF e município NÃO são obrigatórios: o cliente já existe no cadastro do
     // Domínio e o CNPJ sozinho o identifica. Preenchidos, o Domínio tenta validar/atualizar o
@@ -1059,7 +1073,7 @@ function buildServicoPrestLines(linhas, avisos) {
     fmtValorTxt(l.valorDescontos || 0),
     fmtValorOpcionalTxt(l.valorDeducao),
     fmtValorTxt(l.valorContabil ?? l.valorServicos ?? 0),
-    fmtValorOpcionalTxt(l.baseCalculo),
+    fmtValorOpcionalTxt(baseEfetiva),
     fmtValorOpcionalTxt(l.aliquotaIss),
     fmtValorOpcionalTxt(l.valorIssNormal),
     fmtValorOpcionalTxt(l.valorIssRetido),
@@ -1072,7 +1086,8 @@ function buildServicoPrestLines(linhas, avisos) {
     campoEstruturalTxt(l.codigoItem, `código do item da linha ${index + 1}`),
     fmtValorOpcionalTxt(l.quantidade),
     fmtValorOpcionalTxt(l.valorUnitario),
-  ].join(";"));
+    ].join(";");
+  });
 }
 
 // Ferramentas que a IA chama pra agir (tool use nativo da API). Antes eram "tags" escritas

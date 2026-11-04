@@ -73,6 +73,27 @@ confere('CNPJ correto nao gera aviso', !!r.arq && r.arq.avisos.length === 0);
 r = gera({ tipo: 'servico_prest', linhas: [{ cnpj: '21208224000160', numeroDocumento: '1', data: '10/08/2026', acumulador: 4, cfps: 9101, valorServicos: 1 }] });
 confere('NF com DV errado tambem avisa', !!r.arq && r.arq.avisos.length === 1);
 
+console.log('\nNF DE SERVICO COM IMPOSTO RETIDO: BASE DE CALCULO (erro real da MV: IRRF 22,87 estourava a alíquota)');
+const nfBase = { cnpj: '43617343000102', numeroDocumento: '62076', data: '30/10/2026', acumulador: 4, cfps: 9101, valorServicos: 101.64 };
+r = gera({ tipo: 'servico_prest', linhas: [{ ...nfBase, valorIrrf: 22.87 }] });
+let c = r.arq && celulasDe(r.arq)[0];
+confere('com IRRF e sem base, a base (coluna 16) sai igual ao valor da nota', c && c[15] === '101,64' && c[14] === '101,64' && c[19] === '22,87', c && JSON.stringify(c));
+r = gera({ tipo: 'servico_prest', linhas: [{ ...nfBase, valorIrrf: 3078.8, valorPis: 416.92, valorCofins: 1924.25, valorCsll: 641.42, valorServicos: 64141.75 }] });
+c = r.arq && celulasDe(r.arq)[0];
+confere('vale também com PIS, COFINS e CSLL retidos', c && c[15] === '64141,75');
+r = gera({ tipo: 'servico_prest', linhas: [{ ...nfBase, valorIrrf: 22.87, baseCalculo: 90 }] });
+c = r.arq && celulasDe(r.arq)[0];
+confere('base informada pela IA nunca é sobrescrita', c && c[15] === '90');
+r = gera({ tipo: 'servico_prest', linhas: [{ ...nfBase }] });
+c = r.arq && celulasDe(r.arq)[0];
+confere('nota sem imposto retido continua sem base (nada muda)', c && c[15] === '' && c.length === 28);
+r = gera({ tipo: 'servico_prest', linhas: [{ ...nfBase, valorIrrf: 22.87, aliquotaIss: 5, valorIssNormal: 5.08 }] });
+c = r.arq && celulasDe(r.arq)[0];
+confere('com ISS na nota a base não é inventada: sai o aviso pedindo a base', c && c[15] === '' && r.arq.avisos.some((a) => /sem base de cálculo/.test(a)), r.arq && JSON.stringify(r.arq.avisos));
+r = gera({ tipo: 'servico_prest', linhas: [{ ...nfBase, valorIrrf: 22.87, valorContabil: 100 }] });
+c = r.arq && celulasDe(r.arq)[0];
+confere('a base usa o valor contábil quando ele difere do valor dos serviços', c && c[15] === '100');
+
 console.log('\nSANITIZACAO E CARACTERES');
 r = gera({ tipo: 'lanctos', linhas: [L({ debito: '1', credito: '2', valor: 5, complemento: 'Pgto NF 123; parcela 2\r\nref. agosto' })] });
 const hist = r.arq && celulasDe(r.arq)[0][5];
