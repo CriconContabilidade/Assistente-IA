@@ -1386,7 +1386,7 @@
 
   // extras=true acrescenta código e CNPJ no mesmo modal; nesse caso a promessa devolve um
   // objeto em vez do texto puro
-  function showPrompt({ title, placeholder = '', defaultValue = '', extras = false }) {
+  function showPrompt({ title, placeholder = '', defaultValue = '', extras = false, defaultCodigo = '', defaultCnpj = '' }) {
     const modalExtras = document.getElementById('modalExtras');
     const modalCodigo = document.getElementById('modalCodigo');
     const modalCnpj = document.getElementById('modalCnpj');
@@ -1395,7 +1395,7 @@
       modalInput.value = defaultValue;
       modalInput.placeholder = placeholder;
       modalExtras.hidden = !extras;
-      if (extras) { modalCodigo.value = ''; modalCnpj.value = ''; }
+      if (extras) { modalCodigo.value = defaultCodigo; modalCnpj.value = defaultCnpj; }
       modalOverlay.classList.add('show');
       setTimeout(() => modalInput.focus(), 0);
 
@@ -1618,6 +1618,14 @@
         effort.textContent = '⚡'.repeat(ESFORCO_ORDEM.indexOf(nivelAtual) + 1);
         item.appendChild(effort);
 
+        const edit = document.createElement('button');
+        edit.className = 'assign-btn edit-btn';
+        edit.type = 'button';
+        edit.title = 'Editar nome, código no Domínio e CNPJ';
+        edit.textContent = '✏️';
+        edit.addEventListener('click', (e) => { e.stopPropagation(); editarEmpresa(emp); });
+        item.appendChild(edit);
+
         const del = document.createElement('button');
         del.className = 'assign-btn del-btn';
         del.type = 'button';
@@ -1640,6 +1648,30 @@
   }
 
   empresaSearch.addEventListener('input', () => renderEmpresaList(empresaSearch.value));
+
+  // Editar empresa (só admin): nome, código no Domínio e CNPJ, com as mesmas limpezas do cadastro. As regras
+  // do Firestore já deixam o admin atualizar a empresa; funcionário só mexe nas observações.
+  async function editarEmpresa(emp) {
+    if (!isAdmin) return;
+    const dados = await showPrompt({
+      title: 'Editar empresa', placeholder: 'Nome da empresa', defaultValue: String(emp.nome || ''),
+      extras: true, defaultCodigo: String(emp.codigoDominio || ''), defaultCnpj: String(emp.cnpj || ''),
+    });
+    if (!dados || !dados.nome || !dados.nome.trim()) return;
+    const novo = {
+      nome: dados.nome.trim(),
+      codigoDominio: (dados.codigo || '').replace(/\D/g, ''),
+      cnpj: (dados.cnpj || '').toUpperCase().replace(/[^0-9A-Z]/g, ''),
+    };
+    try {
+      await updateDoc(doc(db, 'assistenteIA_empresas', emp.id), novo);
+    } catch (err) {
+      console.error('Erro editando a empresa:', err);
+      alert('Não consegui salvar as alterações. Tente de novo; se continuar, avise o administrador.');
+      return;
+    }
+    if (emp.id === activeEmpresaId) chatTitle.textContent = novo.nome;
+  }
 
   // Excluir empresa (só admin): pede o nome digitado; a function apaga a empresa e tudo dentro dela.
   const normalizarNome = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
