@@ -879,6 +879,71 @@ const pedidoComArquivos = (message, files) => handler({
   const blocoDiario2m = chamadas[0].messages[chamadas[0].messages.length - 1].content.find((b) => b.type === 'text' && b.text.includes('PDF convertido em texto'));
   confere('Diário com só 2 meses vai inteiro, sem aviso', blocoDiario2m && blocoDiario2m.text.includes('LANC-MAR-p7') && blocoDiario2m.text.includes('LANC-ABR-p12') && !/DIÁRIO com/.test(blocoDiario2m.text));
 
+  console.log('\n10t) Diário com as contas em máscara: aviso por código (não depende da IA); padrões e observações recusam máscara');
+  const cabMasc = (colConta) => txtPdf(30, 760, 'Empresa: TESTE LTDA | Folha: 0001') + txtPdf(30, 745, 'C.N.P.J.: 11.111.111/0001-11') + txtPdf(30, 730, 'Periodo: 01/03/2026 - 31/03/2026') + txtPdf(30, 715, 'DIARIO') + txtPdf(30, 700, `Data | Lote | ${colConta} | Descricao | Historico | Debito | Credito`);
+  const paginaConta = (colConta, conta) => cabMasc(colConta) + Array.from({ length: 8 }, (_, i) => txtPdf(30, 680 - i * 14, `${String(10 + i).padStart(2, '0')}/03/2026 | ${7000 + i} | ${conta} | Despesa | PGTO REF. TESTE | 100,00`)).join('');
+  const diarioMascara = criarPdf([paginaConta('Classificacao', '3.4.1.02.000'), paginaConta('Classificacao', '3.4.1.04.000')]);
+  const diarioCodigo = criarPdf([paginaConta('Codigo', '384'), paginaConta('Codigo', '865')]);
+  prepararEmpresa();
+  roteiro = [resp([txt('Recebi o diário.')], 'end_turn')];
+  let rMasc = await pedidoComArquivos('segue o diário', [arquivoPdf('diario_masc.pdf', diarioMascara)]);
+  const blocoMasc = chamadas[0].messages[chamadas[0].messages.length - 1].content.find((b) => b.type === 'text' && b.text.includes('PDF convertido em texto'));
+  confere('a IA recebe, junto do Diário, o aviso de que as contas estão em máscara', blocoMasc && /AVISO DO SISTEMA: este Diário veio com as contas pela CLASSIFICAÇÃO/.test(blocoMasc.text), blocoMasc && blocoMasc.text.slice(0, 200));
+  confere('a resposta ao usuário começa com o aviso do sistema (mesmo a IA não tendo avisado)', /^⚠️ \*\*Aviso do sistema:\*\* o Diário "diario_masc\.pdf" veio com as contas pela classificação/.test(rMasc.text) && /Recebi o diário\./.test(rMasc.text), rMasc.text.slice(0, 160));
+  confere('o aviso traz o print de como emitir com o código', /<img src="assets\/caminhos\/diario-emissao\.png"/.test(rMasc.text) || /diario-emissao/.test(rMasc.text), rMasc.text.slice(0, 400));
+  prepararEmpresa();
+  roteiro = [resp([txt('Atenção: reemita o Diário com "Identificação da conta: Código".')], 'end_turn')];
+  let rMasc2 = await pedidoComArquivos('segue o diário', [arquivoPdf('diario_masc.pdf', diarioMascara)]);
+  confere('se a IA já avisou, o sistema não repete o aviso', !/Aviso do sistema/.test(rMasc2.text), rMasc2.text.slice(0, 120));
+  prepararEmpresa();
+  roteiro = [resp([txt('Recebi o diário.')], 'end_turn')];
+  let rCod = await pedidoComArquivos('segue o diário', [arquivoPdf('diario_cod.pdf', diarioCodigo)]);
+  const blocoCod = chamadas[0].messages[chamadas[0].messages.length - 1].content.find((b) => b.type === 'text' && b.text.includes('PDF convertido em texto'));
+  confere('Diário com o código reduzido não recebe aviso nenhum', blocoCod && !/AVISO DO SISTEMA/.test(blocoCod.text) && rCod.text === 'Recebi o diário.', rCod.text.slice(0, 120));
+
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('salvar_padrao', { palavrasChave: ['REPASSE TJ'], credito: '2.1.2.06.001', debito: '7' })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('salvar_padrao recusa conta em máscara e explica o que fazer', res.is_error === true && /em máscara/.test(res.content) && /CÓDIGO REDUZIDO/.test(res.content), res.content);
+      return resp([uso('salvar_padrao', { palavrasChave: ['REPASSE TJ'], credito: '340', debito: '7' })], 'tool_use');
+    },
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('salvar_padrao com código reduzido continua funcionando', !res.is_error, res.content);
+      return resp([uso('salvar_observacao', { texto: 'Valores a Repassar (2.1.2.06.001) recebe os alvarás do Tribunal de Justiça' })], 'tool_use');
+    },
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('salvar_observacao recusa conta em máscara', res.is_error === true && /máscara/.test(res.content), res.content);
+      return resp([uso('salvar_observacao', { texto: 'Alvarás do Tribunal de Justiça entram na conta 340, nunca no Banco' })], 'tool_use');
+    },
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('observação sem máscara (valor 1.234,56 e data 10/03 não confundem) é salva', !res.is_error, res.content);
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('guarda o padrão');
+
+  console.log('\n10u) gerar_arquivo não deixa passar conta em máscara nos lançamentos');
+  prepararEmpresa();
+  roteiro = [
+    resp([uso('gerar_arquivo', { tipo: 'lanctos', linhas: [{ data: '10/08/2026', debito: '3.4.1.02.000', credito: '7', valor: 93.1, complemento: 'Tarifa', iniciaLote: '1' }] })], 'tool_use'),
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('lançamento com conta em máscara é recusado com o motivo (a IA corrige sozinha)', res.is_error === true && /em máscara/.test(res.content) && /CÓDIGO REDUZIDO/.test(res.content) && /Linha 1/.test(res.content), res.content);
+      return resp([uso('gerar_arquivo', { tipo: 'lanctos', linhas: [{ data: '10/08/2026', debito: '384', credito: '7', valor: 93.1, complemento: 'Tarifa', iniciaLote: '1' }] })], 'tool_use');
+    },
+    (params) => {
+      const res = params.messages[params.messages.length - 1].content[0];
+      confere('com o código reduzido gera normalmente', !res.is_error, String(res.content).slice(0, 120));
+      return resp([txt('ok')], 'end_turn');
+    },
+  ];
+  await pedido('gera os lançamentos');
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [

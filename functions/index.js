@@ -319,6 +319,31 @@ function limitarDiario(paginas) {
   const indices = mesDe.map((m, i) => (mantidos.includes(m) ? i : -1)).filter((i) => i >= 0);
   return { indices, meses, mantidos };
 }
+// Conta "em máscara" (classificação com pontos, ex.: 3.4.1.04.000). O Domínio importa pelo CÓDIGO REDUZIDO
+// (só dígitos, ex.: 384): máscara num lançamento ou num padrão salvo gera arquivo que o Domínio recusa.
+const MASCARA_EM_TEXTO = /\b\d(?:\.\d{1,3}){3,5}\b/;
+// O Diário pode vir com as contas pela classificação (máscara) em vez do código, conforme a opção
+// "Identificação da conta" na emissão. Detecta pelo texto convertido: cabeçalho "Classificação" e/ou a
+// 3ª coluna das linhas de lançamento. Devolve null se não for um Diário.
+function analisarContasDiario(paginas) {
+  const norm = (l) => stripAccentsJs(l).toUpperCase().replace(/[\s|]+/g, " ").trim();
+  const inicio = paginas.slice(0, 3);
+  const ehDiario = inicio.some((p) => p.slice(0, 12).some((l) => norm(l) === "DIARIO"))
+    && inicio.some((p) => p.slice(0, 12).some((l) => norm(l).startsWith("PERIODO:")));
+  if (!ehDiario) return null;
+  let mascara = 0;
+  let codigo = 0;
+  for (const linhas of inicio) {
+    for (const l of linhas) {
+      const c = l.split(" | ").map((x) => x.trim());
+      if (c.length < 4 || !/^\d{2}\/\d{2}\/\d{4}$/.test(c[0])) continue;
+      if (contaEhMascara(c[2])) mascara++;
+      else if (/^\d{1,6}$/.test(c[2])) codigo++;
+    }
+  }
+  const cabecalhoMascara = inicio.some((p) => p.slice(0, 14).some((l) => /CLASSIFICACAO/.test(norm(l)) && /^DATA /.test(norm(l))));
+  return { mascara: mascara > codigo || (mascara === codigo && cabecalhoMascara) };
+}
 // "123-134", 7 ou "7" viram números de página
 function listaDePaginas(entrada) {
   const out = new Set();
@@ -393,7 +418,7 @@ async function pdfParaTexto(buffer, obterCandidatas = async () => [], opcoesText
     const semRepeticao = removerCabecalhosRepetidos(escolhidas);
     const totalFinal = semRepeticao.paginas.reduce((t, linhas) => t + linhas.join("\n").length, 0);
     if (totalFinal > PDF_MAX_CHARS_TEXTO) return recusa("grande");
-    return { ok: true, paginas: semRepeticao.paginas, numeros, diario, totalPaginasOriginal: doc.numPages, total: totalFinal, cabecalhosRemovidos: semRepeticao.removidas, protegido: aberto.protegido, senhaUsada: aberto.senha };
+    return { ok: true, diarioContas: analisarContasDiario(paginas), paginas: semRepeticao.paginas, numeros, diario, totalPaginasOriginal: doc.numPages, total: totalFinal, cabecalhosRemovidos: semRepeticao.removidas, protegido: aberto.protegido, senhaUsada: aberto.senha };
   } finally {
     await doc.destroy();
   }
@@ -427,11 +452,17 @@ async function blocosDoArquivo(f, opcoes = {}) {
       const notaPaginas = Array.isArray(opcoes.paginas) && opcoes.paginas.length
         ? `; só as páginas pedidas (${r.numeros.join(", ")}) de ${r.totalPaginasOriginal}`
         : "";
+      const mascaraDiario = !!(r.diarioContas && r.diarioContas.mascara);
+      const notaMascara = mascaraDiario
+        ? `; ⚠️ AVISO DO SISTEMA: este Diário veio com as contas pela CLASSIFICAÇÃO (máscara com pontos, ex.: 3.4.1.04.000) e NÃO pelo código reduzido numérico que o Domínio exige. Não use essas contas em lançamentos nem em padrões salvos; o usuário já foi avisado de que precisa emitir de novo com "Identificação da conta: Código"`
+        : "";
       const aviso = opcoes.original && r.protegido ? " O PDF original não pode ser enviado porque tem senha; este é o texto extraído." : "";
-      return [{
+      const blocosTexto = [{
         type: "text",
-        text: `--- Conteúdo de ${f.name} (PDF convertido em texto pelo sistema: ${r.paginas.length} página(s); colunas separadas por " | "${r.cabecalhosRemovidos ? "; o cabeçalho que se repetia no topo das páginas seguintes foi omitido, vale o da primeira página" : ""}${notaDiario}${notaPaginas}; imagens, logotipos e gráficos do PDF não vêm no texto — se precisar ver o visual, use buscar_arquivo com original=true)${aviso} ---\n\n${corpo}`,
+        text: `--- Conteúdo de ${f.name} (PDF convertido em texto pelo sistema: ${r.paginas.length} página(s); colunas separadas por " | "${r.cabecalhosRemovidos ? "; o cabeçalho que se repetia no topo das páginas seguintes foi omitido, vale o da primeira página" : ""}${notaDiario}${notaPaginas}${notaMascara}; imagens, logotipos e gráficos do PDF não vêm no texto — se precisar ver o visual, use buscar_arquivo com original=true)${aviso} ---\n\n${corpo}`,
       }];
+      blocosTexto.mascaraDiario = mascaraDiario;
+      return blocosTexto;
     }
     if (r && !r.ok && r.motivo === "paginas") {
       return [{ type: "text", text: `--- ${f.name}: o PDF tem ${r.paginas} página(s) e nenhuma das pedidas existe. ---` }];
@@ -939,6 +970,10 @@ function validarLotesLanctos(linhas) {
   fecharLote();
 }
 
+// Conta "em máscara" (classificação com pontos, ex.: 3.4.1.04.000). O Domínio importa pelo CÓDIGO REDUZIDO
+// (só dígitos, ex.: 384): máscara num lançamento ou num padrão salvo gera arquivo que o Domínio recusa.
+const contaEhMascara = (v) => /^\d+(?:\.\d+)+$/.test(String(v == null ? "" : v).trim());
+
 function buildLanctosLines(linhasOriginais) {
   const linhas = normalizarIniciaLote(linhasOriginais);
   validarLotesLanctos(linhas);
@@ -947,6 +982,11 @@ function buildLanctosLines(linhasOriginais) {
     const credito = campoEstruturalTxt(l.credito, `crédito da linha ${index + 1}`, false);
     if (!debito && !credito) {
       throw new Error(`Linha ${index + 1} de Lançamentos: informe ao menos a conta a débito ou a crédito.`);
+    }
+    for (const [rotulo, conta] of [["débito", debito], ["crédito", credito]]) {
+      if (conta && contaEhMascara(conta)) {
+        throw new Error(`Linha ${index + 1} de Lançamentos: a conta de ${rotulo} "${conta}" está em máscara (classificação com pontos). Use o CÓDIGO REDUZIDO numérico (ex.: 384); se não souber, pergunte ao usuário ou peça o Diário/Plano de Contas emitido com "Identificação da conta: Código".`);
+      }
     }
     return [
       dataTxt(l.data, `data da linha ${index + 1}`),
@@ -1876,6 +1916,7 @@ exports.assistenteChat = onCall(
     }
 
     const contentBlocks = [];
+    const diariosComMascara = [];
     const arquivosNaoLidos = [];
     const arquivosParaGuardar = [];
     let totalBase64Chars = 0;
@@ -1924,6 +1965,7 @@ exports.assistenteChat = onCall(
         throw new HttpsError("invalid-argument", `Arquivo "${f.name}" é grande demais.`);
       }
       const blocos = await blocosDoArquivo(f, opcoesPdf);
+      if (blocos && blocos.mascaraDiario) diariosComMascara.push(f.name);
       if (blocos && blocos.grande) {
         throw new HttpsError(
           "invalid-argument",
@@ -2284,6 +2326,11 @@ exports.assistenteChat = onCall(
       if (!spec.ignorar && !spec.debito && !spec.credito) {
         throw new Error("informe débito e/ou crédito, ou marque ignorar=true");
       }
+      const contasInformadas = [spec.debito, spec.credito, spec.provisao && spec.provisao.debito, spec.provisao && spec.provisao.credito].filter(Boolean);
+      const emMascara = contasInformadas.find(contaEhMascara);
+      if (emMascara) {
+        throw new Error(`a conta "${emMascara}" está em máscara (classificação com pontos). O Domínio importa pelo CÓDIGO REDUZIDO numérico (ex.: 384). Não salve com a máscara: peça ao usuário o código dessa conta ou um Diário/Plano de Contas emitido com "Identificação da conta: Código"`);
+      }
       const chavesNovasNorm = palavrasChave.map((c) => stripAccentsJs(String(c)).toUpperCase());
       const condicaoValorNova = spec.condicaoValor != null ? Number(spec.condicaoValor) : null;
       const provisaoNova = spec.provisao && (spec.provisao.debito || spec.provisao.credito)
@@ -2430,6 +2477,9 @@ exports.assistenteChat = onCall(
         if (nome === "salvar_observacao") {
           const texto = String((entrada && entrada.texto) || "").replace(/\s+/g, " ").trim().slice(0, 500);
           if (texto.length < 8) return { content: "Texto curto demais pra ser uma regra — nada foi salvo.", is_error: true };
+          if (MASCARA_EM_TEXTO.test(texto)) {
+            return { content: "Essa observação cita conta em máscara (classificação com pontos, como 2.1.2.06.001). Use o CÓDIGO REDUZIDO numérico da conta (ex.: 384); se não tiver, peça ao usuário. Nada foi salvo.", is_error: true };
+          }
           const atuais = Array.isArray(empresa.notas) ? empresa.notas : [];
           if (atuais.some((n) => String(n).trim().toLowerCase() === texto.toLowerCase())) {
             return { content: "Essa observação já estava salva." };
@@ -2621,6 +2671,11 @@ exports.assistenteChat = onCall(
           ? "⚠️ O relatório é grande demais — a IA gastou todo o espaço de resposta só pensando, sem sobrar texto. Tenta dividir o pedido em partes menores."
           : "⚠️ A IA não retornou texto dessa vez (sem erro aparente). Tente reformular a pergunta ou tente novamente.";
       }
+    }
+
+    // Diário com as contas em máscara: o aviso não pode depender de a IA reparar. Entra na resposta por código.
+    if (diariosComMascara.length > 0 && !/Identificação da conta/i.test(text)) {
+      text = `⚠️ **Aviso do sistema:** o Diário "${diariosComMascara[0]}" veio com as contas pela classificação (máscara, como 3.4.1.04.000) e não pelo código reduzido, que é o que o Domínio exige. Emita o Diário de novo com "Identificação da conta: Código" antes de montar lançamentos ou salvar padrões. {{IMG:diario-emissao}}\n\n${text}`;
     }
 
     // Troca as tags {{IMG:xxx}} que a IA pode ter incluído (só quando explica onde emitir um
