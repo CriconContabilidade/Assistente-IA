@@ -2648,6 +2648,13 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
         : f.name;
       nomeBtn.addEventListener('click', () => abrirPreviewAnexo(f, i));
       chip.append(nomeBtn, document.createTextNode(' '));
+      if (/\.xlsx?$/i.test(String(f.name || '')) && f.size > 300 * 1024) {
+        const grande = document.createElement('span');
+        grande.className = 'attach-analisando';
+        grande.textContent = '⚠️ planilha grande: só as primeiras abas vão pra IA';
+        grande.title = 'Planilhas com muitas abas gastam muitos tokens. O sistema envia só as primeiras abas; a IA pede as outras se precisar.';
+        chip.append(grande, document.createTextNode(' '));
+      }
       if (arquivosEmAnalise.has(f)) {
         const an = document.createElement('span');
         an.className = 'attach-analisando';

@@ -387,7 +387,7 @@ async function blocosDoArquivo(f, opcoes = {}) {
   }
   if (SPREADSHEET_MEDIA_TYPES.has(f.mediaType) || nomeMinusculo.endsWith(".xlsx")) {
     try {
-      const texto = await xlsxBufferToText(Buffer.from(f.base64, "base64"));
+      const texto = await xlsxBufferToText(Buffer.from(f.base64, "base64"), { abas: opcoes.abas });
       return [{ type: "text", text: `--- Conteúdo de ${f.name} ---\n${texto}` }];
     } catch (err) {
       console.error(`Erro lendo planilha ${f.name}:`, err);
@@ -487,20 +487,52 @@ function cellToString(v) {
   return String(v);
 }
 
-async function xlsxBufferToText(buffer) {
+// Planilha com muitas abas (uma por mês, durante anos) custava centenas de milhares de tokens numa
+// única mensagem: uma de 120 abas passou de US$ 1 só pra ser lida. Sem abas pedidas, vão as primeiras
+// abas até o orçamento de caracteres, com a lista das que ficaram de fora; a IA reabre as outras com
+// buscar_arquivo (parâmetro "abas"). Abas pedidas têm um teto maior.
+const LIMITE_ENTRADA_CHARS = 450000;
+const XLSX_MAX_CHARS_PADRAO = 40000;
+const XLSX_MAX_CHARS_ABAS_PEDIDAS = 150000;
+async function xlsxBufferToText(buffer, opcoes = {}) {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer);
-  const parts = [];
+  const abas = [];
   workbook.eachSheet((sheet) => {
-    parts.push(`--- Planilha: ${sheet.name} ---`);
+    const linhas = [`--- Planilha: ${sheet.name} ---`];
     sheet.eachRow({ includeEmpty: false }, (row) => {
       const values = Array.isArray(row.values) ? row.values.slice(1) : [];
       const celulas = Array.from(values, (v) => cellToString(v));
       while (celulas.length && celulas[celulas.length - 1].trim() === "") celulas.pop();
-      if (celulas.length) parts.push(celulas.join("\t"));
+      if (celulas.length) linhas.push(celulas.join("\t"));
     });
+    abas.push({ nome: sheet.name, texto: linhas.join("\n") });
   });
-  return parts.join("\n");
+  const norm = (t) => String(t == null ? "" : t).trim().toLowerCase();
+  const pedidas = Array.isArray(opcoes.abas) ? opcoes.abas.map((x) => String(x).trim()).filter(Boolean) : [];
+  let candidatas = abas;
+  let limite = opcoes.maxChars || XLSX_MAX_CHARS_PADRAO;
+  if (pedidas.length) {
+    candidatas = abas.filter((a, i) => pedidas.some((p) => norm(p) === norm(a.nome) || p === String(i + 1)));
+    limite = XLSX_MAX_CHARS_ABAS_PEDIDAS;
+    if (!candidatas.length) {
+      return `Nenhuma aba com esse nome nesta planilha. Abas existentes: ${abas.map((a) => a.nome).join(", ")}.`;
+    }
+  }
+  const incluidas = [];
+  let usado = 0;
+  for (const a of candidatas) {
+    if (incluidas.length > 0 && usado + a.texto.length > limite) break;
+    incluidas.push(a);
+    usado += a.texto.length;
+  }
+  let texto = incluidas.map((a) => a.texto).join("\n");
+  const omitidas = candidatas.filter((a) => !incluidas.includes(a));
+  if (omitidas.length) {
+    const nomes = omitidas.slice(0, 40).map((a) => a.nome).join(", ") + (omitidas.length > 40 ? ` e mais ${omitidas.length - 40}` : "");
+    texto += `\n\n--- Aviso do sistema: esta planilha tem ${abas.length} abas; só ${incluidas.length} foram enviadas (${incluidas.map((a) => a.nome).join(", ")}) pra economizar. Abas NÃO enviadas: ${nomes}. Se precisar de outra aba, chame buscar_arquivo com o nome do arquivo e o campo "abas" (nomes das abas que precisa). Não invente dados das abas que não vieram. ---`;
+  }
+  return texto;
 }
 
 // ---------------- geração de arquivo de importação (Domínio) ----------------
@@ -998,6 +1030,7 @@ const FERRAMENTAS = [
       properties: {
         nome: { type: "string", description: "Nome do arquivo como aparece no histórico de relatórios" },
         original: { type: "boolean", description: "true = devolve o PDF original (com imagens) em vez do texto extraído. Só use se o texto não bastar; é bem mais caro." },
+        abas: { type: "array", items: { type: "string" }, description: "Só para planilhas com várias abas: nomes das abas que você precisa ler (as outras não vêm, pra economizar). Sem isso vêm só as primeiras." },
       },
       required: ["nome"],
     },
@@ -1789,6 +1822,15 @@ exports.assistenteChat = onCall(
     // continua lido do cache. É montado uma vez, antes da rodada 1, e não é alterado nas rodadas
     // de ferramenta (isso mudaria o prefixo já enviado).
     contentBlocks.unshift({ type: "text", text: montarContextoAtual(fechamentoAtual, montarBlocoEstado(estado)) });
+    // Trava de segurança de custo: uma mensagem com texto demais (planilha enorme, vários relatórios
+    // gigantes) custava mais de US$ 1 antes de qualquer resposta. Recusa antes de chamar a IA.
+    const charsDaMensagem = contentBlocks.reduce((t, b) => t + (b.type === "text" ? b.text.length : 0), 0);
+    if (charsDaMensagem > LIMITE_ENTRADA_CHARS) {
+      throw new HttpsError(
+        "invalid-argument",
+        `Os arquivos desta mensagem são grandes demais (cerca de ${Math.round(charsDaMensagem / 3.5 / 1000)} mil tokens, uns US$ ${(charsDaMensagem / 3.5 * 2 / 1e6).toFixed(2)} só pra ler). Envie menos arquivos por vez ou reduza o tamanho (páginas do PDF, abas da planilha).`
+      );
+    }
     log(`conteúdo montado (${contentBlocks.length} blocos)`);
     const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY.value() });
 
@@ -2214,7 +2256,8 @@ exports.assistenteChat = onCall(
         if (nome === "buscar_arquivo") {
           const pedido = String((entrada && entrada.nome) || "");
           const salvo = await carregarArquivoSalvo(db, empresaId, pedido);
-          const blocos = salvo ? await blocosDoArquivo(salvo, { ...opcoesPdf, original: !!(entrada && entrada.original) }) : null;
+          const abasPedidas = entrada && Array.isArray(entrada.abas) ? entrada.abas.map(String).slice(0, 20) : undefined;
+          const blocos = salvo ? await blocosDoArquivo(salvo, { ...opcoesPdf, original: !!(entrada && entrada.original), abas: abasPedidas }) : null;
           if (!blocos) {
             return {
               content: `Não encontrei "${pedido}" no acervo desta empresa. Responda com o que já tem; só peça ao usuário se for realmente indispensável.`,

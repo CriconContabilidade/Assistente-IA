@@ -766,6 +766,19 @@ const pedidoComArquivos = (message, files) => handler({
   let e2 = await ERRO(pedidoComId('req-ex-2'));
   confere('apagada no meio das ferramentas: aborta antes de executar a ferramenta e não grava nada', e2 && e2.code === 'aborted' && chaves('assistenteIA_empresas/mv').length === 0, e2 && (e2.code + ' ' + chaves('assistenteIA_empresas/mv').join(', ')));
 
+  console.log('\n10n) trava de custo: mensagem com texto demais é recusada ANTES de chamar a IA');
+  prepararEmpresa();
+  roteiro = [resp([txt('nao deveria chamar')], 'end_turn')];
+  const enorme = { name: 'enorme.txt', mediaType: 'text/plain', base64: Buffer.from('linha de relatorio com valores 123,45 '.repeat(14000)).toString('base64') };
+  let eGrande = null;
+  try { await pedidoComArquivos('segue', [enorme]); } catch (e) { eGrande = e; }
+  confere('texto acima do teto: erro claro e nenhuma chamada à IA', eGrande && eGrande.code === 'invalid-argument' && /grandes demais/.test(eGrande.message) && chamadas.length === 0, eGrande && eGrande.message);
+  prepararEmpresa();
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  const medio = { name: 'medio.txt', mediaType: 'text/plain', base64: Buffer.from('linha de relatorio com valores 123,45 '.repeat(2000)).toString('base64') };
+  await pedidoComArquivos('segue', [medio]);
+  confere('texto normal passa direto', chamadas.length === 1);
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [

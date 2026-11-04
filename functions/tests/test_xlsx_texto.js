@@ -26,6 +26,25 @@ const confere = (nome, ok, detalhe = '') => { if (!ok) falhas++; console.log(`${
   confere('colunas vazias do fim da linha são cortadas', linhas[0] === 'Data\tHistorico\tValor', JSON.stringify(linhas[0]));
   confere('célula vazia no MEIO continua (as colunas não deslocam)', linhas.includes('11/08/2026\t\t10\t\tobs'), JSON.stringify(linhas));
   confere('zero é dado, não é removido', linhas.includes('0\t0'), JSON.stringify(linhas));
+
+  // planilha com muitas abas: só as primeiras abas dentro do orçamento, o resto fica pra buscar_arquivo
+  const grande = new ExcelJS.Workbook();
+  for (let i = 1; i <= 120; i++) {
+    const w = grande.addWorksheet(`Mes${i}`);
+    for (let r = 1; r <= 60; r++) w.addRow([`item ${r} da aba ${i}`, r * 10.5, 'observacao longa o bastante pra ocupar espaco']);
+  }
+  const bufGrande = Buffer.from(await grande.xlsx.writeBuffer());
+  const todo = await m.exports.xlsxBufferToText(bufGrande, { maxChars: 1e9 });
+  const padrao = await m.exports.xlsxBufferToText(bufGrande);
+  confere('padrão manda só uma fração das abas (orçamento de caracteres)', padrao.length < 60000 && padrao.length < todo.length / 5, `${padrao.length} de ${todo.length}`);
+  confere('a primeira aba vem; as últimas não', padrao.includes('--- Planilha: Mes1 ---') && !padrao.includes('--- Planilha: Mes120 ---'));
+  confere('o aviso diz o total de abas, quais foram e quais ficaram de fora', /tem 120 abas/.test(padrao) && /Abas NÃO enviadas: Mes\d+/.test(padrao) && /e mais \d+/.test(padrao) && padrao.includes('"abas"'));
+  const pedida = await m.exports.xlsxBufferToText(bufGrande, { abas: ['mes77', '3'] });
+  confere('aba pedida pelo nome (sem diferenciar maiúscula) ou número vem inteira, e só ela', pedida.includes('--- Planilha: Mes77 ---') && pedida.includes('--- Planilha: Mes3 ---') && !pedida.includes('--- Planilha: Mes1 ---') && !/Aviso do sistema/.test(pedida));
+  const inexistente = await m.exports.xlsxBufferToText(bufGrande, { abas: ['nao existe'] });
+  confere('aba que não existe devolve a lista de abas, sem erro', /Nenhuma aba com esse nome/.test(inexistente) && inexistente.includes('Mes120'));
+  confere('planilha pequena não recebe aviso nenhum', !/Aviso do sistema/.test(texto));
+
   console.log(falhas === 0 ? '\nTUDO OK' : `\n${falhas} FALHA(S)`);
   process.exit(falhas ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });
