@@ -2467,7 +2467,14 @@ exports.assistenteChat = onCall(
       const semCondicao = bateram.filter((p) => p.condicaoValor == null);
       const candidatos = comValorCerto.length > 0 ? comValorCerto : semCondicao;
       if (candidatos.length === 0) return { status: "nenhum" };
-      if (candidatos.length > 1) return { status: "ambiguo", opcoes: candidatos };
+      if (candidatos.length > 1) {
+        // Desempate: se só UM candidato é completo (validado, com as contas) e os outros são migrados
+        // incompletos/pendentes de revisão, vale o completo em vez de travar o match como ambíguo.
+        const completo = (p) => !p.pendenteRevisao && (p.ignorar === true || (p.debito && p.credito));
+        const completos = candidatos.filter(completo);
+        if (completos.length === 1) return { status: "encontrado", padrao: completos[0] };
+        return { status: "ambiguo", opcoes: candidatos };
+      }
       return { status: "encontrado", padrao: candidatos[0] };
     }
     function formatarPadrao(p) {
