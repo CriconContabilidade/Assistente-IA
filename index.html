@@ -1903,14 +1903,20 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     "Eu acabei de fazer as contas: uma hora parado é igual a zero planilhas feitas, o que se traduz em uma Jacheline muito brava. O seu balanço final está no vermelho, [Nome]!",
     "Você sabe o que acontece quando subtraímos o trabalho da contabilidade? Fraude fiscal corporativa. Não me faça te denunciar para a Jacheline. Vá trabalhar, [Nome]!",
     "Se somarmos o tempo que você passou olhando para o teto com os minutos que passou no banheiro, o resultado é um crime contra a Cricon. Menos ócio, mais números, [Nome]!",
-    "Se preguiça fosse crime você já estaria PRESA. Vá trabalhar agora, [Nome], antes que a Jacheline veja você na Câmera!",
+    "Se preguiça fosse crime você já estaria {PRESO}. Vá trabalhar agora, [Nome], antes que a Jacheline veja você na Câmera!",
     "Atenção, [Nome]: já faz 58 minutos que você sumiu. Devo lançar o seu salário deste mês em 'Despesas Operacionais' ou direto em 'Doações e Perdas Irrecuperáveis'?",
-    "Se não trabalhar rendesse juros compostos você estaria rica. Mas como não rende, vá trabalhar para enriquecer sua chefa, [Nome]!",
+    "Se não trabalhar rendesse juros compostos você estaria {RICO}. Mas como não rende, vá trabalhar para enriquecer sua chefa, [Nome]!",
   ];
   function primeiroNomeLogado() {
     const bruto = (auth.currentUser && auth.currentUser.displayName) || String(currentUserEmail || '').split('@')[0] || '';
     const nome = bruto.trim().split(/[\s._-]+/)[0] || 'você';
     return nome.charAt(0).toUpperCase() + nome.slice(1);
+  }
+  // Só o Guilherme é homem no escritório: pra ele as frases que falam DELE saem no masculino ("preso", "rico");
+  // pras demais, no feminino. "chefa" não muda pra ninguém: é a Jacheline, a dona do escritório.
+  function aplicarFraseOciosa(frase, nome) {
+    const homem = /^guilherme$/i.test(String(nome).normalize('NFD').replace(/[̀-ͯ]/g, ''));
+    return frase.replace(/\[Nome\]/g, nome).replace(/\{PRESO\}/g, homem ? 'PRESO' : 'PRESA').replace(/\{RICO\}/g, homem ? 'rico' : 'rica');
   }
   function horarioComercialLocal(d = new Date()) {
     const dia = d.getDay(), h = d.getHours();
@@ -1934,7 +1940,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       if (r && r.data && r.data.ignorado) return;
       pingPorEmpresa.set(empresaIdPing, Date.now());
       if (empresaIdPing === activeEmpresaId) {
-        const frase = FRASES_OCIO[Math.floor(Math.random() * FRASES_OCIO.length)].replace(/\[Nome\]/g, primeiroNomeLogado());
+        const frase = aplicarFraseOciosa(FRASES_OCIO[Math.floor(Math.random() * FRASES_OCIO.length)], primeiroNomeLogado());
         avisoOcioso = { empresaId: empresaIdPing, texto: frase };
         redesenharMensagens();
       }
