@@ -3338,7 +3338,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const p = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit' }).formatToParts(new Date());
     return `${p.find(x => x.type === 'year').value}-${p.find(x => x.type === 'month').value}`;
   }
-  const fmtUsd = (v) => `US$ ${Number(v || 0).toFixed(2)}`;
+  const fmtUsd = (v) => `US$ ${Number(v || 0).toFixed(2).replace('.', ',')}`;
   const usoBadge = document.getElementById('usoBadge');
   let unsubConsumoAtivo = null;
   let consumoAtivo = null; // só admin: documento consumo/{mês} da empresa aberta
@@ -3424,7 +3424,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     usoResumo.style.color = pctGeral >= 100 ? 'var(--danger)' : pctGeral >= 80 ? '#f2c14e' : '';
     usoGeral.innerHTML = '';
     const rotuloGeral = document.createElement('span'); rotuloGeral.textContent = `Limite geral do mês (US$) — soma das empresas hoje: ${fmtUsd(total)}`;
-    const inpGeral = document.createElement('input'); inpGeral.type = 'number'; inpGeral.min = '1'; inpGeral.step = '1'; inpGeral.value = limiteGeral.toFixed(2);
+    const inpGeral = document.createElement('input'); inpGeral.type = 'text'; inpGeral.inputMode = 'decimal'; inpGeral.value = limiteGeral.toFixed(2).replace('.', ',');
     inpGeral.style.cssText = 'width:80px; background:var(--panel); border:1px solid var(--panel-border); color:var(--text); border-radius:8px; padding:4px 6px; text-align:right;';
     const btnGeral = document.createElement('button'); btnGeral.className = 'icon-btn'; btnGeral.textContent = 'Salvar'; btnGeral.style.padding = '4px 8px';
     btnGeral.addEventListener('click', async () => {
@@ -3447,7 +3447,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       const tdGasto = document.createElement('td'); tdGasto.className = 'num'; tdGasto.textContent = fmtUsd(l.custo);
       tdGasto.title = `${l.chamadas} chamada(s) à IA no mês`;
       const tdLim = document.createElement('td'); tdLim.className = 'num';
-      const inp = document.createElement('input'); inp.type = 'number'; inp.min = '0.1'; inp.step = '0.1'; inp.value = l.limite.toFixed(2);
+      const inp = document.createElement('input'); inp.type = 'text'; inp.inputMode = 'decimal'; inp.value = l.limite.toFixed(2).replace('.', ',');
       tdLim.appendChild(inp);
       const tdPct = document.createElement('td'); tdPct.className = classePct(pct); tdPct.textContent = `${pct}%`;
       const tdSalvar = document.createElement('td');
