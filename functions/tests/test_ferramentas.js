@@ -1046,6 +1046,21 @@ const pedidoComArquivos = (message, files) => handler({
   await pedido('oi');
   confere('sem tributação nem serviço cadastrados, nada disso aparece', !/Perfil da empresa/.test(ctxAtual(chamadas[0])));
 
+  console.log('\n10aa) prefixo fixo frio: a gravação dele não pesa no limite da empresa (o total do escritório mantém o custo real)');
+  prepararEmpresa();
+  const mesAa = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit' }).format(new Date()).slice(0, 7);
+  banco.delete(`assistenteIA_empresas/mv/consumo/${mesAa}`); banco.delete(`assistenteIA_consumoGeral/${mesAa}`);
+  roteiro = [{ content: [txt('ok')], stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 50000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 50000 } } }];
+  await pedido('oi');
+  const empAa = banco.get(`assistenteIA_empresas/mv/consumo/${mesAa}`), gerAa = banco.get(`assistenteIA_consumoGeral/${mesAa}`);
+  confere('escritório soma o custo real (US$ 0,20 de gravação)', gerAa && gerAa.custoUsd > 0.2 && gerAa.custoUsd < 0.21, JSON.stringify(gerAa));
+  confere('empresa paga menos no limite dela (prefixo fixo descontado) e o custo real fica guardado', empAa && empAa.custoUsd < gerAa.custoUsd - 0.02 && Math.abs(empAa.custoRealUsd - gerAa.custoUsd) < 1e-9, JSON.stringify(empAa));
+  banco.delete(`assistenteIA_empresas/mv/consumo/${mesAa}`); banco.delete(`assistenteIA_consumoGeral/${mesAa}`);
+  roteiro = [{ content: [txt('ok')], stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 60000, cache_creation_input_tokens: 500, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 500 } } }];
+  await pedido('oi de novo');
+  const empAb = banco.get(`assistenteIA_empresas/mv/consumo/${mesAa}`);
+  confere('com o prefixo quente (leitura alta) nada é descontado', empAb && Math.abs(empAb.custoUsd - empAb.custoRealUsd) < 1e-9, JSON.stringify(empAb));
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [

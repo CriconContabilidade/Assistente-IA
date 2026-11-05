@@ -1624,7 +1624,7 @@ function limiteAtingido(custoUsd, limiteUsd) {
 // Soma o gasto de uma chamada à IA no consumo do mês da empresa (só admin lê esse documento,
 // com os valores em dólar) e deixa na própria empresa só o percentual, que a tela mostra pra
 // todos. Em transação: várias mensagens da mesma empresa podem terminar ao mesmo tempo.
-async function registrarConsumo(empresaId, custoUsd, tokens) {
+async function registrarConsumo(empresaId, custoUsd, tokens, custoEmpresaUsd = custoUsd) {
   const mes = mesConsumo();
   const empresaRef = db.collection("assistenteIA_empresas").doc(empresaId);
   const consumoRef = empresaRef.collection("consumo").doc(mes);
@@ -1632,7 +1632,9 @@ async function registrarConsumo(empresaId, custoUsd, tokens) {
   await db.runTransaction(async (tx) => {
     const [empSnap, conSnap, geralSnap] = await Promise.all([tx.get(empresaRef), tx.get(consumoRef), tx.get(geralRef)]);
     const atual = conSnap.exists ? conSnap.data() : {};
-    const novoCusto = (atual.custoUsd || 0) + custoUsd;
+    // o total do escritório soma o custo real (bate com a fatura); o da empresa pode vir menor
+    // (ver descontoPrefixoFrioUsd): ela não paga no limite dela o cache do prompt fixo compartilhado
+    const novoCusto = (atual.custoUsd || 0) + custoEmpresaUsd;
     const limite = limiteMensalEmpresa(empSnap.exists ? empSnap.data() : {});
     // empresa excluída (ou em exclusão) não pode ganhar documento de volta; o total do escritório
     // continua somando, porque o gasto aconteceu de verdade
@@ -1640,6 +1642,7 @@ async function registrarConsumo(empresaId, custoUsd, tokens) {
     if (viva) tx.set(consumoRef, {
       mes,
       custoUsd: novoCusto,
+      custoRealUsd: (atual.custoRealUsd ?? atual.custoUsd ?? 0) + custoUsd,
       chamadas: (atual.chamadas || 0) + 1,
       entrada: (atual.entrada || 0) + (tokens.entrada || 0),
       saida: (atual.saida || 0) + (tokens.saida || 0),
@@ -1662,16 +1665,29 @@ async function registrarConsumo(empresaId, custoUsd, tokens) {
 // Registra o consumo com uma nova tentativa e nunca rejeita (falha aqui não pode derrubar a
 // resposta). Quem chama guarda a promessa e o handler espera todas antes de responder: numa Cloud
 // Function, trabalho solto depois da resposta pode ser cortado e o gasto ficaria sem registro.
-async function registrarConsumoSeguro(empresaId, custoUsd, tokens) {
+async function registrarConsumoSeguro(empresaId, custoUsd, tokens, custoEmpresaUsd = custoUsd) {
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
     try {
-      await registrarConsumo(empresaId, custoUsd, tokens);
+      await registrarConsumo(empresaId, custoUsd, tokens, custoEmpresaUsd);
       return;
     } catch (e) {
       if (tentativa === 2) console.error("CONSUMO_NAO_REGISTRADO", JSON.stringify({ empresaId, custoUsd, tokens }), e);
       else await new Promise((r) => setTimeout(r, 400));
     }
   }
+}
+
+// O prefixo fixo (definições das ferramentas + regras) é igual pra todas as empresas e fica em cache de 1h.
+// Quando ele está frio (1ª mensagem do dia, mais de 1h sem uso no escritório ou logo depois de um deploy),
+// a empresa que calha de mandar a primeira mensagem paga sozinha a gravação (US$ 4/M em vez de US$ 0,10/M
+// de leitura) e estoura o limite dela por algo que todas as outras vão aproveitar. Devolve quanto
+// descontar do limite da empresa: a diferença entre gravar e ler o prefixo (estimado em caracteres/3,5,
+// nunca mais que o gravado de fato). O total do escritório continua com o custo real.
+function descontoPrefixoFrioUsd(prefixoTokens, lido, gravado1h) {
+  if (!(prefixoTokens > 0) || !(gravado1h > 0) || lido >= prefixoTokens * 0.5) return 0;
+  const tokens = Math.min(prefixoTokens, gravado1h);
+  const p = PRECO_USD_POR_MTOK;
+  return (tokens * (p.gravado1h - p.lido)) / 1e6;
 }
 
 // Estimativa (por baixo) de quanto custa só LER a mensagem nova, a preço cheio de entrada. Serve pra
@@ -2333,8 +2349,11 @@ exports.assistenteChat = onCall(
       const entradaCh = u.input_tokens ?? 0, lidoCh = u.cache_read_input_tokens ?? 0, saidaCh = u.output_tokens ?? 0;
       const g5Ch = (g5 != null || g1 != null) ? (g5 ?? 0) : (ttl1hAtivo ? 0 : g);
       const g1Ch = (g5 != null || g1 != null) ? (g1 ?? 0) : (ttl1hAtivo ? g : 0);
-      pendentesConsumo.push(registrarConsumoSeguro(empresaId, custoEstimadoUsd({ entrada: entradaCh, lido: lidoCh, gravado5m: g5Ch, gravado1h: g1Ch, saida: saidaCh }),
-        { entrada: entradaCh, saida: saidaCh, lido: lidoCh, gravado: g }));
+      const custoRealCh = custoEstimadoUsd({ entrada: entradaCh, lido: lidoCh, gravado5m: g5Ch, gravado1h: g1Ch, saida: saidaCh });
+      const prefixoTokens = (JSON.stringify(FERRAMENTAS).length + String(promptFixo).length) / 3.5;
+      const descontoCh = descontoPrefixoFrioUsd(prefixoTokens, lidoCh, g1Ch);
+      pendentesConsumo.push(registrarConsumoSeguro(empresaId, custoRealCh,
+        { entrada: entradaCh, saida: saidaCh, lido: lidoCh, gravado: g }, Math.max(0, custoRealCh - descontoCh)));
       log(`tokens: entrada ${u.input_tokens ?? 0} | cache gravado ${u.cache_creation_input_tokens ?? 0} | cache lido ${u.cache_read_input_tokens ?? 0} | saída ${u.output_tokens ?? 0}`);
     };
 

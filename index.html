@@ -828,6 +828,7 @@
         <div class="sub" id="chatSub">Escolha uma empresa na lista ao lado pra começar</div>
       </div>
       <div class="header-actions">
+        <div class="uso-badge" id="cacheBadge" hidden></div>
         <div class="uso-badge" id="usoBadge" hidden></div>
         <button class="icon-btn" id="openDocsBtn">📁 Histórico de documentos</button>
         <button class="icon-btn" id="openNotesBtn">🧠 O que a IA já sabe</button>
@@ -1844,6 +1845,30 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
   let unsubMessages = null;
   let currentMessages = []; // histórico em memória da empresa ativa, pra mandar como contexto pra IA
 
+  // Selo do cache da conversa: o histórico fica em cache por 1h e renova a cada resposta da IA. Só usa a
+  // hora da última resposta que já está na tela (nenhuma leitura extra). Não sabe de deploy: depois de um
+  // o cache esfria mesmo com o selo ativo, e o tooltip avisa que é uma estimativa.
+  const cacheBadge = document.getElementById('cacheBadge');
+  const CACHE_MS = 60 * 60 * 1000;
+  function atualizarSeloCache() {
+    let ultimo = 0;
+    if (activeEmpresaId) {
+      for (const m of currentMessages) {
+        if (m && m.role === 'assistant' && m.criadoEm && typeof m.criadoEm.toMillis === 'function') ultimo = Math.max(ultimo, m.criadoEm.toMillis());
+      }
+    }
+    const restante = ultimo ? ultimo + CACHE_MS - Date.now() : 0;
+    if (restante <= 0) { cacheBadge.hidden = true; return; }
+    const hora = new Date(ultimo + CACHE_MS).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    const min = Math.ceil(restante / 60000);
+    const acabando = min <= 10;
+    cacheBadge.hidden = false;
+    cacheBadge.classList.toggle('alerta', acabando);
+    cacheBadge.textContent = acabando ? `🟡 Cache expira às ${hora} — ${min} min` : `🟢 Cache ativo até ${hora}`;
+    cacheBadge.title = 'Enquanto o cache está ativo (1h após a última resposta), continuar esta conversa custa 90% menos. Se passar desse horário, a próxima mensagem precisará recarregar o histórico. (Estimativa: uma atualização do sistema também esfria o cache.)';
+  }
+  setInterval(atualizarSeloCache, 30000);
+
   function selectEmpresa(id) {
     activeEmpresaId = id;
     const emp = empresas.find(e => e.id === id);
@@ -1962,6 +1987,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const desenhar = (snap) => {
       chatBody.innerHTML = "";
       currentMessages = snap.docs.map(d => d.data());
+      atualizarSeloCache();
       const saudacao = empresaRecemCriada && empresaRecemCriada.id === activeEmpresaId
         ? { role: 'assistant', text: welcomeMessage(empresaRecemCriada.nome), files: [] }
         : null;
