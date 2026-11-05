@@ -603,12 +603,13 @@
     box-shadow: 0 20px 60px rgba(0,0,0,0.5);
   }
   .modal-card h3 { margin: 0 0 14px; font-size: 1rem; }
-  .modal-card input {
+  .modal-card input, .modal-card select {
     width: 100%; padding: 10px 12px; border-radius: 10px;
     border: 1px solid var(--panel-border); background: rgba(255,255,255,0.03);
     color: var(--text); font-size: 0.9rem;
   }
-  .modal-card input:focus { outline: none; border-color: var(--accent2); }
+  .modal-card select option { background: #1a1f33; color: var(--text); }
+  .modal-card select:focus, .modal-card input:focus { outline: none; border-color: var(--accent2); }
   .modal-label { display: block; font-size: 0.74rem; color: var(--text-dim); margin-bottom: 4px; }
   .modal-dica { font-size: 0.72rem; color: var(--text-faint); line-height: 1.45; margin-top: -4px; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
@@ -876,6 +877,17 @@
       <input type="text" id="modalCodigo" placeholder="ex: 185" inputmode="numeric">
       <label class="modal-label" for="modalCnpj">CNPJ</label>
       <input type="text" id="modalCnpj" placeholder="00.000.000/0000-00" autocapitalize="characters">
+      <label class="modal-label" for="modalTributacao">Tributação (opcional)</label>
+      <select id="modalTributacao">
+        <option value="">Não informada</option>
+        <option value="Simples Nacional">Simples Nacional</option>
+        <option value="Lucro Presumido">Lucro Presumido</option>
+        <option value="Lucro Real">Lucro Real</option>
+        <option value="MEI">MEI</option>
+        <option value="Isenta / Imune">Isenta / Imune</option>
+      </select>
+      <label class="modal-label" for="modalServico">Serviço prestado / atividade (opcional)</label>
+      <input type="text" id="modalServico" placeholder="ex: advocacia, clínica médica, aluguel de imóveis" maxlength="200">
       <div class="modal-dica">Dá pra deixar em branco e preencher depois — a IA usa esses dados nos arquivos de importação.</div>
     </div>
     <div class="modal-actions">
@@ -1396,16 +1408,23 @@
 
   // extras=true acrescenta código e CNPJ no mesmo modal; nesse caso a promessa devolve um
   // objeto em vez do texto puro
-  function showPrompt({ title, placeholder = '', defaultValue = '', extras = false, defaultCodigo = '', defaultCnpj = '' }) {
+  function showPrompt({ title, placeholder = '', defaultValue = '', extras = false, defaultCodigo = '', defaultCnpj = '', defaultTributacao = '', defaultServico = '' }) {
     const modalExtras = document.getElementById('modalExtras');
     const modalCodigo = document.getElementById('modalCodigo');
     const modalCnpj = document.getElementById('modalCnpj');
+    const modalTrib = document.getElementById('modalTributacao');
+    const modalServ = document.getElementById('modalServico');
     return new Promise((resolve) => {
       modalTitle.textContent = title;
       modalInput.value = defaultValue;
       modalInput.placeholder = placeholder;
       modalExtras.hidden = !extras;
-      if (extras) { modalCodigo.value = defaultCodigo; modalCnpj.value = defaultCnpj; }
+      if (extras) {
+        modalCodigo.value = defaultCodigo; modalCnpj.value = defaultCnpj; modalServ.value = defaultServico;
+        // tributação gravada fora da lista (texto antigo) continua aparecendo e não é perdida ao editar
+        if (defaultTributacao && ![...modalTrib.options].some((o) => o.value === defaultTributacao)) modalTrib.add(new Option(defaultTributacao, defaultTributacao));
+        modalTrib.value = defaultTributacao;
+      }
       modalOverlay.classList.add('show');
       setTimeout(() => modalInput.focus(), 0);
 
@@ -1417,11 +1436,12 @@
         modalInput.removeEventListener('keydown', onKeydown);
         modalCodigo.removeEventListener('keydown', onKeydown);
         modalCnpj.removeEventListener('keydown', onKeydown);
+        modalServ.removeEventListener('keydown', onKeydown);
         resolve(result);
       }
       function onConfirm() {
         if (extras) {
-          cleanup({ nome: modalInput.value, codigo: modalCodigo.value.trim(), cnpj: modalCnpj.value.trim() });
+          cleanup({ nome: modalInput.value, codigo: modalCodigo.value.trim(), cnpj: modalCnpj.value.trim(), tributacao: modalTrib.value, servico: modalServ.value.trim() });
         } else {
           cleanup(modalInput.value);
         }
@@ -1436,6 +1456,7 @@
       modalInput.addEventListener('keydown', onKeydown);
       modalCodigo.addEventListener('keydown', onKeydown);
       modalCnpj.addEventListener('keydown', onKeydown);
+      modalServ.addEventListener('keydown', onKeydown);
     });
   }
 
@@ -1669,12 +1690,15 @@
     const dados = await showPrompt({
       title: 'Editar empresa', placeholder: 'Nome da empresa', defaultValue: String(emp.nome || ''),
       extras: true, defaultCodigo: String(emp.codigoDominio || ''), defaultCnpj: String(emp.cnpj || ''),
+      defaultTributacao: String(emp.tributacao || ''), defaultServico: String(emp.servicoPrestado || ''),
     });
     if (!dados || !dados.nome || !dados.nome.trim()) return;
     const novo = {
       nome: dados.nome.trim(),
       codigoDominio: (dados.codigo || '').replace(/\D/g, ''),
       cnpj: (dados.cnpj || '').toUpperCase().replace(/[^0-9A-Z]/g, ''),
+      tributacao: String(dados.tributacao || '').slice(0, 60),
+      servicoPrestado: String(dados.servico || '').slice(0, 200),
     };
     try {
       await updateDoc(doc(db, 'assistenteIA_empresas', emp.id), novo);
@@ -1785,6 +1809,8 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
       // mantém letras (CNPJ alfanumérico da Receita); o backend decide na hora de usar se é
       // um CNPJ alfanumérico válido ou se fica só com os números
       cnpj: (dados.cnpj || "").toUpperCase().replace(/[^0-9A-Z]/g, ""),
+      tributacao: String(dados.tributacao || "").slice(0, 60),
+      servicoPrestado: String(dados.servico || "").slice(0, 200),
       notas: [],
       responsavelEmail: "",
       criadoEm: serverTimestamp(),

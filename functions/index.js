@@ -1697,9 +1697,14 @@ function buildSystemPrompt(empresaNome, notas, documentos, cadastro, agora = Dat
   // não precisa perguntar nem procurar no banco compartilhado.
   const codigo = cadastro && cadastro.codigo;
   const cnpj = cadastro && cadastro.cnpj;
-  const cadastroTexto = (codigo || cnpj)
-    ? `\nCódigo no Domínio: ${codigo || "(não informado)"} | CNPJ: ${cnpj || "(não informado)"} — use esses dados nos arquivos sem perguntar de novo (o codigoEmp dos Lançamentos o sistema já preenche sozinho).`
+  const tributacao = String((cadastro && cadastro.tributacao) || "").trim().slice(0, 60);
+  const servico = String((cadastro && cadastro.servico) || "").trim().slice(0, 200);
+  const perfilTexto = (tributacao || servico)
+    ? `\nPerfil da empresa: tributação ${tributacao || "(não informada)"} | serviço/atividade: ${servico || "(não informado)"} — leve isso em conta nos impostos e lançamentos (ex.: Simples Nacional paga DAS e não gera ServicoPrest pra isso).`
     : "";
+  const cadastroTexto = perfilTexto + ((codigo || cnpj)
+    ? `\nCódigo no Domínio: ${codigo || "(não informado)"} | CNPJ: ${cnpj || "(não informado)"} — use esses dados nos arquivos sem perguntar de novo (o codigoEmp dos Lançamentos o sistema já preenche sozinho).`
+    : "");
   const notasSeguras = Array.isArray(notas) ? notas : [];
   const documentosSeguros = Array.isArray(documentos) ? documentos : [];
   const notasTexto = notasSeguras.length
@@ -2155,7 +2160,7 @@ exports.assistenteChat = onCall(
     // prompt, cada mudança invalidava o cache de todo o histórico que vem depois. Aqui o histórico
     // continua lido do cache. É montado uma vez, antes da rodada 1, e não é alterado nas rodadas
     // de ferramenta (isso mudaria o prefixo já enviado).
-    const { fixo: promptFixo, dinamico: promptDinamico, variavel: promptVariavel } = buildSystemPrompt(empresa.nome, empresa.notas, documentos, { codigo: empresa.codigoDominio, cnpj: normalizarDocumento(empresa.cnpj) });
+    const { fixo: promptFixo, dinamico: promptDinamico, variavel: promptVariavel } = buildSystemPrompt(empresa.nome, empresa.notas, documentos, { codigo: empresa.codigoDominio, cnpj: normalizarDocumento(empresa.cnpj), tributacao: empresa.tributacao, servico: empresa.servicoPrestado });
     contentBlocks.unshift({ type: "text", text: montarContextoAtual(fechamentoAtual, montarBlocoEstado(estado), promptVariavel) });
     // Trava de segurança de custo: uma mensagem com texto demais (planilha enorme, vários relatórios
     // gigantes) custava mais de US$ 1 antes de qualquer resposta. Recusa antes de chamar a IA.

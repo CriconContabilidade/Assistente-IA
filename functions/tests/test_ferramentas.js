@@ -1032,6 +1032,20 @@ const pedidoComArquivos = (message, files) => handler({
   confere('no contexto da mensagem seguinte os impostos aparecem como JSON, não "[object Object]"', /nfs_padrao/.test(ctxAtual(chamadas[0])) && !/\[object Object\]/.test(ctxAtual(chamadas[0])) && /"codigo":38/.test(ctxAtual(chamadas[0])), ctxAtual(chamadas[0]).slice(0, 600));
   confere('o prompt explica quando usar cada layout e como importar o arquivo novo', /nfs_padrao/.test(chamadas[0].system[0].text) && /Importação Padrão > Leiaute Domínio Sistemas com Separador/.test(chamadas[0].system[0].text) && /NÃO consegue lançar o COSIRF/.test(chamadas[0].system[0].text));
 
+  console.log('\n10z) perfil da empresa (tributação e serviço prestado, opcionais) vai no contexto da mensagem, não no prompt de sistema');
+  prepararEmpresa();
+  banco.set('assistenteIA_empresas/mv', { ...banco.get('assistenteIA_empresas/mv'), tributacao: 'Simples Nacional', servicoPrestado: 'ATIVIDADE-QWX9' });
+  chamadas.length = 0;
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('oi');
+  confere('tributação e serviço aparecem no contexto atual', /tributação Simples Nacional/.test(ctxAtual(chamadas[0])) && /serviço\/atividade: ATIVIDADE-QWX9/.test(ctxAtual(chamadas[0])), ctxAtual(chamadas[0]).slice(0, 400));
+  confere('e não entram no prompt de sistema em cache', !/ATIVIDADE-QWX9/.test(JSON.stringify(chamadas[0].system)));
+  prepararEmpresa();
+  chamadas.length = 0;
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await pedido('oi');
+  confere('sem tributação nem serviço cadastrados, nada disso aparece', !/Perfil da empresa/.test(ctxAtual(chamadas[0])));
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [
