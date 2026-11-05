@@ -174,6 +174,18 @@ const MAX_HISTORY_ITEMS = 80;
 // Saudação sozinha ("oi", "bom dia", "teste") sem anexo não precisa de IA: reenviar o prompt e o histórico só
 // pra responder "oi" chegou a custar US$ 0,20 (cache frio). Responde pronto, a custo zero.
 const SAUDACAO_SOZINHA = /^(\s*(oi+|ol[aá]+|bom dia|boa tarde|boa noite|tudo bem|opa|teste)[?!.,\s]*)+$/i;
+// Keep-alive do cache de 1h: perto de a conversa completar 1h parada, a tela pede UM ping (1 token de saída)
+// que relê o prefixo em cache e renova o prazo por mais 1h — bem mais barato que regravar tudo na volta.
+// O servidor também trava: só em horário comercial (seg a sex, 8h às 18h de Brasília) e no máximo um ping
+// por empresa a cada 50 min, mesmo com várias abas ou pessoas.
+const KEEPALIVE_TEXTO = "(ping de manutenção do cache; não responda)";
+const KEEPALIVE_INTERVALO_MIN_MS = 50 * 60 * 1000;
+function horarioComercialBrasilia(data = new Date()) {
+  const partes = new Intl.DateTimeFormat("en-US", { timeZone: "America/Sao_Paulo", weekday: "short", hour: "2-digit", hour12: false }).formatToParts(data);
+  const dia = partes.find((x) => x.type === "weekday").value;
+  const hora = Number(partes.find((x) => x.type === "hour").value) % 24;
+  return !["Sat", "Sun"].includes(dia) && hora >= 8 && hora < 18;
+}
 const RESPOSTA_SAUDACAO = "Olá! Pode anexar os relatórios do mês (Extrato, Contas a Pagar/Receber, etc.) para começarmos o fechamento.";
 function ehSaudacaoSozinha(message, files, history) {
   if (Array.isArray(files) && files.length > 0) return false;
@@ -1926,10 +1938,12 @@ exports.assistenteChat = onCall(
       throw new HttpsError("unauthenticated", "É preciso estar logado.");
     }
 
-    const { empresaId, message, history, files, requestId } = request.data || {};
+    let { empresaId, message, history, files, requestId } = request.data || {};
+    const keepAlive = (request.data || {}).keepAlive === true;
     if (!empresaId || typeof empresaId !== "string") {
       throw new HttpsError("invalid-argument", "empresaId é obrigatório.");
     }
+    if (keepAlive) { message = KEEPALIVE_TEXTO; files = []; requestId = undefined; }
     if (requestId !== undefined && (typeof requestId !== "string" || requestId.length > 100)) {
       throw new HttpsError("invalid-argument", "requestId inválido.");
     }
@@ -1966,6 +1980,15 @@ exports.assistenteChat = onCall(
     const responsavel = (empresa.responsavelEmail || "").toLowerCase();
     if (!isAdmin && responsavel && responsavel !== userEmail) {
       throw new HttpsError("permission-denied", "Você não tem acesso a esta empresa.");
+    }
+
+    if (keepAlive) {
+      const ultimoPing = Number(empresa.ultimoPingMs) || 0;
+      if (!horarioComercialBrasilia() || Date.now() - ultimoPing < KEEPALIVE_INTERVALO_MIN_MS) {
+        log("keep-alive ignorado (fora do horário comercial ou ping recente)");
+        return { text: "", usage: null, arquivosGerados: [], keepAlive: true, ignorado: true };
+      }
+      await db.collection("assistenteIA_empresas").doc(empresaId).set({ ultimoPingMs: Date.now() }, { merge: true });
     }
 
     // Limite mensal de consumo da empresa: bate no custo estimado já gravado no mês. Passou do
@@ -2202,7 +2225,8 @@ exports.assistenteChat = onCall(
     // continua lido do cache. É montado uma vez, antes da rodada 1, e não é alterado nas rodadas
     // de ferramenta (isso mudaria o prefixo já enviado).
     const { fixo: promptFixo, dinamico: promptDinamico, variavel: promptVariavel } = buildSystemPrompt(empresa.nome, empresa.notas, documentos, { codigo: empresa.codigoDominio, cnpj: normalizarDocumento(empresa.cnpj), tributacao: empresa.tributacao, servico: empresa.servicoPrestado });
-    contentBlocks.unshift({ type: "text", text: montarContextoAtual(fechamentoAtual, montarBlocoEstado(estado), promptVariavel) });
+    // no keep-alive a mensagem final é só o ping: sem o contexto atual (gastaria entrada à toa)
+    if (!keepAlive) contentBlocks.unshift({ type: "text", text: montarContextoAtual(fechamentoAtual, montarBlocoEstado(estado), promptVariavel) });
     // Trava de segurança de custo: uma mensagem com texto demais (planilha enorme, vários relatórios
     // gigantes) custava mais de US$ 1 antes de qualquer resposta. Recusa antes de chamar a IA.
     const charsDaMensagem = contentBlocks.reduce((t, b) => t + (b.type === "text" ? b.text.length : 0), 0);
@@ -2297,7 +2321,7 @@ exports.assistenteChat = onCall(
         // espaço pra terminar com texto ou fechar o tool_use — a conversa voltava com o aviso de
         // "relatório grande demais" mesmo em casos que cabiam perfeitamente, só precisando de
         // mais espaço de saída.
-        max_tokens: 64000,
+        max_tokens: keepAlive ? 1 : 64000,
         system: systemPrompt,
         output_config: { effort: esforco },
         ...(ferramentasAtivas ? { tools: FERRAMENTAS } : {}),
@@ -2378,7 +2402,7 @@ exports.assistenteChat = onCall(
       const prefixoTokens = (JSON.stringify(FERRAMENTAS).length + String(promptFixo).length) / 3.5;
       const descontoCh = descontoPrefixoFrioUsd(prefixoTokens, lidoCh, g1Ch);
       pendentesConsumo.push(registrarConsumoSeguro(empresaId, custoRealCh,
-        { entrada: entradaCh, saida: saidaCh, lido: lidoCh, gravado: g }, Math.max(0, custoRealCh - descontoCh)));
+        { entrada: entradaCh, saida: saidaCh, lido: lidoCh, gravado: g }, keepAlive ? 0 : Math.max(0, custoRealCh - descontoCh)));
       log(`tokens: entrada ${u.input_tokens ?? 0} | cache gravado ${u.cache_creation_input_tokens ?? 0} | cache lido ${u.cache_read_input_tokens ?? 0} | saída ${u.output_tokens ?? 0}`);
     };
 
@@ -2854,6 +2878,11 @@ exports.assistenteChat = onCall(
       response = await chamarIA();
       log("resposta da Anthropic recebida");
       logUso(response);
+      if (keepAlive) {
+        // só tocou o cache: não salva nada no chat nem no estado; o custo vai só pro total do escritório
+        log("keep-alive concluído");
+        return { text: "", usage: response.usage || null, arquivosGerados: [], keepAlive: true };
+      }
       const trecho = textoDaResposta(response).trim();
       if (trecho) textos.push(trecho);
 

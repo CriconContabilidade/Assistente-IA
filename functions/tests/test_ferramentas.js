@@ -1080,6 +1080,40 @@ const pedidoComArquivos = (message, files) => handler({
   await comId('oi', [{ role: 'assistant', text: 'Você confirma o padrão da tarifa?' }]);
   confere('se a IA acabou de fazer uma pergunta, "oi" vai pra IA (pode ser a resposta)', chamadas.length === 1);
 
+  console.log('\n10ac) keep-alive do cache: 1 token, nada salvo no chat, custo só no total do escritório, com travas');
+  prepararEmpresa();
+  const DateReal = Date;
+  const fixaHora = (iso) => { const t = new DateReal(iso).getTime(); global.Date = class extends DateReal { constructor(...a) { if (a.length) super(...a); else super(t); } static now() { return t; } }; };
+  const mesKa = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit' }).format(new DateReal()).slice(0, 7);
+  const kaPedido = () => handler({ auth: { token: { email: 'contabilidadecricon@gmail.com' } }, data: { empresaId: 'mv', keepAlive: true, history: [{ role: 'user', text: 'fechamento de outubro' }, { role: 'assistant', text: 'Pronto, segue o arquivo.' }] } });
+  const antesMsgs = mensagensSalvas().length;
+  banco.delete(`assistenteIA_empresas/mv/consumo/${mesKa}`); banco.delete(`assistenteIA_consumoGeral/${mesKa}`);
+  fixaHora('2026-11-04T13:00:00Z'); // quarta-feira, 10h em Brasília
+  chamadas.length = 0;
+  roteiro = [{ content: [txt('')], stop_reason: 'max_tokens', usage: { input_tokens: 20, output_tokens: 1, cache_read_input_tokens: 50000, cache_creation_input_tokens: 300, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 300 } } }];
+  const rKa = await kaPedido();
+  confere('faz UMA chamada com max_tokens 1 e o mesmo prompt de sistema/ferramentas', chamadas.length === 1 && chamadas[0].max_tokens === 1 && Array.isArray(chamadas[0].system) && chamadas[0].system.length === 2 && !!chamadas[0].tools, `${chamadas.length} ${chamadas[0] && chamadas[0].max_tokens}`);
+  confere('o histórico vai na ordem, com o ping curto por último e SEM o contexto atual', chamadas[0].messages.length === 3 && chamadas[0].messages[2].content[0].text.startsWith('(ping de manutenção'), JSON.stringify(chamadas[0].messages[2]).slice(0, 200));
+  confere('devolve keepAlive sem texto e não grava nada no chat', rKa.keepAlive === true && rKa.text === '' && mensagensSalvas().length === antesMsgs);
+  const empKa = banco.get(`assistenteIA_empresas/mv/consumo/${mesKa}`), gerKa = banco.get(`assistenteIA_consumoGeral/${mesKa}`);
+  confere('o custo entra no total do escritório mas não no limite da empresa', gerKa && gerKa.custoUsd > 0 && empKa && empKa.custoUsd === 0 && empKa.custoRealUsd > 0, JSON.stringify([gerKa, empKa]).slice(0, 300));
+  chamadas.length = 0;
+  roteiro = [{ content: [txt('')], stop_reason: 'max_tokens', usage: { input_tokens: 20, output_tokens: 1 } }];
+  const rKa2 = await kaPedido();
+  confere('segundo ping logo em seguida é ignorado (intervalo mínimo de 50 min) e não chama a IA', rKa2.ignorado === true && chamadas.length === 0);
+  prepararEmpresa();
+  fixaHora('2026-11-04T23:30:00Z'); // 20h30 em Brasília
+  const rKa3 = await kaPedido();
+  confere('fora do horário comercial (20h30) não chama a IA', rKa3.ignorado === true && chamadas.length === 0);
+  fixaHora('2026-11-07T13:00:00Z'); // sábado
+  const rKa4 = await kaPedido();
+  confere('no sábado não chama a IA', rKa4.ignorado === true && chamadas.length === 0);
+  global.Date = DateReal;
+  chamadas.length = 0;
+  roteiro = [resp([txt('ok')], 'end_turn')];
+  await comId('fechamento de outubro, por favor');
+  confere('mensagem normal continua com max_tokens alto', chamadas[0].max_tokens === 64000);
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [
