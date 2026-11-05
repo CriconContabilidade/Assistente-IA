@@ -242,7 +242,7 @@
   .empresa-item {
     display: flex; align-items: center; gap: 10px;
     padding: 9px 10px; border-radius: 10px; cursor: pointer;
-    border: 1px solid transparent;
+    border: 1px solid transparent; position: relative;
     transition: background .15s, border-color .15s;
   }
   .empresa-item:hover { background: rgba(255,255,255,0.04); }
@@ -294,6 +294,16 @@
     padding: 5px 6px; border-radius: 7px; line-height: 1; min-width: 24px; min-height: 24px;
   }
   .empresa-item:hover .assign-btn, .empresa-item:hover .effort-btn { opacity: 1; }
+  /* botões de admin (responsável, esforço, editar, excluir) ficam numa faixa sobreposta no canto direito, só
+     ao passar o mouse: o nome da empresa mantém a largura toda e nada espreme a linha. */
+  .empresa-acoes {
+    position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+    display: none; align-items: center; gap: 0; padding: 2px 3px; border-radius: 9px;
+    background: #1a1f33; box-shadow: -10px 0 10px 2px #1a1f33;
+  }
+  .empresa-item:hover .empresa-acoes, .empresa-item:focus-within .empresa-acoes { display: flex; }
+  .empresa-acoes .assign-btn, .empresa-acoes .effort-btn { padding: 4px 4px; min-width: 22px; font-size: 0.8rem; white-space: nowrap; }
+  .empresa-item:focus-within .assign-btn, .empresa-item:focus-within .effort-btn { opacity: 1; }
   .assign-btn:hover, .effort-btn:hover { color: var(--accent2); background: rgba(255,255,255,0.07); }
   /* estado visual do nível de esforço (achado do Antigravity: o ícone era sempre o mesmo ⚡,
      sem nenhum jeito de saber o nível sem esperar o tooltip). */
@@ -1601,12 +1611,14 @@
       info.append(name, sub);
       item.append(avatar, info);
       if (isAdmin) {
+        const acoes = document.createElement('div');
+        acoes.className = 'empresa-acoes';
         const assign = document.createElement('button');
         assign.className = 'assign-btn';
         assign.type = 'button';
         assign.title = 'Atribuir responsável';
         assign.textContent = emojiDoUsuario(emp.responsavelEmail);
-        item.appendChild(assign);
+        acoes.appendChild(assign);
 
         const nivelAtual = ESFORCO_ORDEM.includes(emp.esforco) ? emp.esforco : 'low';
         const effort = document.createElement('button');
@@ -1616,7 +1628,7 @@
         // quantidade de raios acompanha o nível — dá pra ver o estado sem esperar o tooltip
         // (achado do Antigravity: antes era sempre o mesmo ícone, sem feedback visual nenhum).
         effort.textContent = '⚡'.repeat(ESFORCO_ORDEM.indexOf(nivelAtual) + 1);
-        item.appendChild(effort);
+        acoes.appendChild(effort);
 
         const edit = document.createElement('button');
         edit.className = 'assign-btn edit-btn';
@@ -1624,7 +1636,7 @@
         edit.title = 'Editar nome, código no Domínio e CNPJ';
         edit.textContent = '✏️';
         edit.addEventListener('click', (e) => { e.stopPropagation(); editarEmpresa(emp); });
-        item.appendChild(edit);
+        acoes.appendChild(edit);
 
         const del = document.createElement('button');
         del.className = 'assign-btn del-btn';
@@ -1632,7 +1644,8 @@
         del.title = 'Excluir esta empresa';
         del.textContent = '🗑';
         del.addEventListener('click', (e) => { e.stopPropagation(); confirmarExclusaoEmpresa(emp); });
-        item.appendChild(del);
+        acoes.appendChild(del);
+        item.appendChild(acoes);
       }
       item.querySelector('.assign-btn')?.addEventListener('click', (e) => {
         e.stopPropagation();
