@@ -415,7 +415,7 @@ const pedidoComArquivos = (message, files) => handler({
   prepararEmpresa();
   roteiro = [
     () => { throw new FakeAnthropic.BadRequestError('cache_control.ttl: invalid'); },
-    resp([uso('atualizar_fechamento', { competencia: '08/2026', pendencias: 1 })], 'tool_use'),
+    resp([uso('salvar_observacao', { texto: 'regra de teste do cache' })], 'tool_use'),
     resp([txt('feito')], 'end_turn'),
   ];
   r = await pedido('oi, preciso de ajuda');
@@ -615,7 +615,7 @@ const pedidoComArquivos = (message, files) => handler({
   prepararEmpresa();
   banco.set('assistenteIA_empresas/mv/estado/atual', { pendencias: ['x'] });
   roteiro = [
-    resp([uso('atualizar_fechamento', { competencia: '08/2026', pendencias: 2 })], 'tool_use'),
+    resp([uso('salvar_observacao', { texto: "primeira regra de teste" })], 'tool_use'),
     resp([uso('salvar_observacao', { texto: "regra de teste do contexto" })], 'tool_use'),
     resp([txt('feito')], 'end_turn'),
   ];
@@ -809,7 +809,7 @@ const pedidoComArquivos = (message, files) => handler({
   await pedido('oi, preciso de ajuda');
   const ctxEstado = ctxAtual(chamadas[0]);
   confere('arquivo com mais de 3 dias vira só um resumo (sem as linhas)', !ctxEstado.includes('LINHA VELHA UNICA') && !ctxEstado.includes('11111,11') && /ÚLTIMO ARQUIVO lanctos \(lanctos\.txt\): 1 linha/.test(ctxEstado), ctxEstado.slice(0, 400));
-  confere('arquivo de hoje continua com as linhas (pra poder corrigir)', ctxEstado.includes('52998224725') && ctxEstado.includes('22222.22'));
+  confere('arquivo de hoje também vira só resumo (as linhas saíram do contexto pra não custar a cada mensagem) e aponta ver_ultimo_arquivo', !ctxEstado.includes('52998224725') && !ctxEstado.includes('22222.22') && /ÚLTIMO ARQUIVO baixa_ent \(baixa_ent\.txt\): 1 linha/.test(ctxEstado) && /ver_ultimo_arquivo ANTES/.test(ctxEstado), ctxEstado.slice(0, 500));
   confere('o resumo do arquivo antigo diz o que fazer se pedirem correção', /ver_ultimo_arquivo/.test(ctxEstado));
 
   console.log('\n10q) limite: o que sobra tem que pagar pelo menos a leitura dos arquivos da mensagem');
@@ -1029,7 +1029,7 @@ const pedidoComArquivos = (message, files) => handler({
   chamadas.length = 0;
   roteiro = [resp([txt('ok')], 'end_turn')];
   await pedido('corrige a nota 153');
-  confere('no contexto da mensagem seguinte os impostos aparecem como JSON, não "[object Object]"', /nfs_padrao/.test(ctxAtual(chamadas[0])) && !/\[object Object\]/.test(ctxAtual(chamadas[0])) && /"codigo":38/.test(ctxAtual(chamadas[0])), ctxAtual(chamadas[0]).slice(0, 600));
+  confere('no contexto da mensagem seguinte os impostos aparecem como JSON, não "[object Object]"', /nfs_padrao/.test(ctxAtual(chamadas[0])) && !/\[object Object\]/.test(ctxAtual(chamadas[0])) && /ver_ultimo_arquivo/.test(ctxAtual(chamadas[0])), ctxAtual(chamadas[0]).slice(0, 600));
   confere('o prompt explica quando usar cada layout e como importar o arquivo novo', /nfs_padrao/.test(chamadas[0].system[0].text) && /Importação Padrão > Leiaute Domínio Sistemas com Separador/.test(chamadas[0].system[0].text) && /NÃO consegue lançar o COSIRF/.test(chamadas[0].system[0].text));
 
   console.log('\n10z) perfil da empresa (tributação e serviço prestado, opcionais) vai no contexto da mensagem, não no prompt de sistema');
@@ -1114,6 +1114,27 @@ const pedidoComArquivos = (message, files) => handler({
   await comId('fechamento de outubro, por favor');
   confere('mensagem normal continua com max_tokens alto', chamadas[0].max_tokens === 64000);
 
+  console.log('\n10ad) rodada que só gerou arquivo não ganha marcador de cache; ver_ultimo_arquivo devolve as linhas');
+  prepararEmpresa();
+  chamadas.length = 0;
+  roteiro = [
+    resp([uso('gerar_arquivo', { tipo: 'lanctos', linhas: [LANC] })], 'tool_use'),
+    resp([txt('Aqui está o arquivo.')], 'end_turn'),
+  ];
+  await pedido('gera o arquivo de lançamentos');
+  const ultGer = chamadas[1].messages[chamadas[1].messages.length - 1];
+  confere('depois de gerar_arquivo, o tool_result não leva cache_control (a próxima chamada é a resposta final)', Array.isArray(ultGer.content) && !ultGer.content.some((b) => b.cache_control), JSON.stringify(ultGer).slice(0, 200));
+  chamadas.length = 0;
+  roteiro = [
+    resp([uso('ver_ultimo_arquivo', { tipo: 'lanctos' })], 'tool_use'),
+    resp([txt('ok')], 'end_turn'),
+  ];
+  await pedido('corrige o arquivo de lançamentos');
+  confere('mas depois de uma ferramenta de busca o marcador continua (a conversa segue)', !!chamadas[1].messages[chamadas[1].messages.length - 1].content.slice(-1)[0].cache_control);
+  confere('o estado da mensagem seguinte só tem o resumo do arquivo (sem tabela) e a dica da ferramenta', !/data \| debito/.test(ctxAtual(chamadas[0])) && /ver_ultimo_arquivo ANTES/.test(ctxAtual(chamadas[0])), ctxAtual(chamadas[0]).slice(0, 400));
+  const fx = chamadas[0].system[0].text;
+  confere('prompt: vários arquivos de uma vez e a checagem de valor pago maior que a parcela', /VÁRIOS ARQUIVOS DE UMA VEZ/.test(fx) && /valor pago é maior que o valor\/saldo da parcela/.test(fx));
+
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
   roteiro = [
@@ -1149,7 +1170,7 @@ const pedidoComArquivos = (message, files) => handler({
   ];
   r = await pedido('corrige a primeira nota');
   const sistemaDaPrimeiraChamada = chamadas[0].system.map((b) => b.text).join('\n') + '\n' + ctxAtual(chamadas[0]);
-  confere('prompt da mensagem seguinte traz o estado salvo (CPF e linhas do último arquivo)', sistemaDaPrimeiraChamada.includes('ESTADO SALVO DO TRABALHO') && sistemaDaPrimeiraChamada.includes('52998224725') && sistemaDaPrimeiraChamada.includes('cnpj | numeroDocumento |') && sistemaDaPrimeiraChamada.includes('52998224725 | 1199 |'));
+  confere('prompt da mensagem seguinte traz o estado salvo (CPF e resumo do último arquivo, sem as linhas)', sistemaDaPrimeiraChamada.includes('ESTADO SALVO DO TRABALHO') && sistemaDaPrimeiraChamada.includes('52998224725') && /ÚLTIMO ARQUIVO servico_prest/.test(sistemaDaPrimeiraChamada) && !sistemaDaPrimeiraChamada.includes('cnpj | numeroDocumento |'));
   confere('linhas do estado vão em tabela (sem repetir as chaves em cada linha)', !ctxAtual(chamadas[0]).includes('"numeroDocumento"'));
   confere('estado vai no INÍCIO da mensagem atual, fora do prompt de sistema (não invalida o cache do histórico)', chamadas[0].system.length === 2 && !chamadas[0].system.some((b) => b.text.includes('ESTADO SALVO DO TRABALHO NESTA EMPRESA')) && ctxAtual(chamadas[0]).includes('ESTADO SALVO DO TRABALHO NESTA EMPRESA') && ctxAtual(chamadas[0]).startsWith('[CONTEXTO ATUAL DO SISTEMA'));
   const baixa = r.arquivosGerados.find((a) => a.nome === 'baixa_ser.txt');
