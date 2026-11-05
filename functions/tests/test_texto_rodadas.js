@@ -61,7 +61,7 @@ const pedido = (message) => handler({ auth: { token: { email: 'contabilidadecric
   console.log('\n2) conversa sem ferramenta continua concatenando tudo (comportamento de sempre)');
   prepararEmpresa();
   roteiro = [resp([txt('Oi! Como posso ajudar?')], 'end_turn')];
-  r = await pedido('oi');
+  r = await pedido('oi, preciso de ajuda');
   confere('texto normal, sem ferramenta', r.text === 'Oi! Como posso ajudar?', r.text);
 
   console.log('\n3) pause_turn sem ferramenta nenhuma continua juntando os pedaços');

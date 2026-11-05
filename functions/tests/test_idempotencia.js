@@ -88,7 +88,7 @@ const processamento = (id) => banco.get(`assistenteIA_empresas/mv/processamentos
   console.log('1) chamada normal com requestId — processa e marca "completed"');
   prepararEmpresa();
   roteiro = [resp([txt('Oi, tudo certo.')], 'end_turn')];
-  let r = await pedido('oi', 'req-1');
+  let r = await pedido('oi, preciso de ajuda', 'req-1');
   confere('respondeu normal', r.text === 'Oi, tudo certo.', r.text);
   confere('IA foi chamada 1 vez', chamadasIA === 1);
   confere('processamento marcado completed com o texto certo', processamento('req-1').status === 'completed' && processamento('req-1').text === 'Oi, tudo certo.', processamento('req-1'));
@@ -98,7 +98,7 @@ const processamento = (id) => banco.get(`assistenteIA_empresas/mv/processamentos
   // assim que o app funciona) — a query antiga (sem filtrar role) podia achar essa em vez do
   // resultado de verdade. Agora nem existe mais query nenhuma em "mensagens" para isso.
   banco.set('assistenteIA_empresas/mv/mensagens/msgUsuario', { role: 'user', text: 'oi', requestId: 'req-1' });
-  const r2 = await pedido('oi', 'req-1');
+  const r2 = await pedido('oi, preciso de ajuda', 'req-1');
   confere('devolve a resposta da IA, NÃO a pergunta do usuário', r2.text === 'Oi, tudo certo.', r2.text);
   confere('IA NÃO foi chamada de novo', chamadasIA === 1, chamadasIA);
 
@@ -164,24 +164,24 @@ const processamento = (id) => banco.get(`assistenteIA_empresas/mv/processamentos
   prepararEmpresa();
   roteiro = [() => { throw new Error('Anthropic fora do ar'); }];
   let erroPrimeira = null;
-  try { await pedido('oi', 'req-com-erro'); } catch (e) { erroPrimeira = e; }
+  try { await pedido('oi, preciso de ajuda', 'req-com-erro'); } catch (e) { erroPrimeira = e; }
   confere('primeira tentativa realmente falhou', !!erroPrimeira);
   confere('processamento marcado "failed"', processamento('req-com-erro').status === 'failed', processamento('req-com-erro'));
   roteiro = [resp([txt('Segunda tentativa deu certo.')], 'end_turn')];
-  const r5 = await pedido('oi', 'req-com-erro');
+  const r5 = await pedido('oi, preciso de ajuda', 'req-com-erro');
   confere('MESMO requestId consegue reprocessar depois do erro', r5.text === 'Segunda tentativa deu certo.', r5.text);
 
   console.log('\n6) processamento "running" com lease expirado é reassumido (function caiu no meio)');
   prepararEmpresa();
   banco.set('assistenteIA_empresas/mv/processamentos/req-travado', { status: 'running', iniciadoEm: { toMillis: () => Date.now() - 400 * 1000 } });
   roteiro = [resp([txt('Reassumiu depois do lease expirar.')], 'end_turn')];
-  const r6 = await pedido('oi', 'req-travado');
+  const r6 = await pedido('oi, preciso de ajuda', 'req-travado');
   confere('reassume um processamento "running" com lease vencido', r6.text === 'Reassumiu depois do lease expirar.', r6.text);
 
   console.log('\n7) sem requestId nenhum, continua funcionando como sempre (sem trava)');
   prepararEmpresa();
   roteiro = [resp([txt('Sem requestId, de boa.')], 'end_turn'), resp([txt('De novo, sem trava nenhuma.')], 'end_turn')];
-  const r7a = await pedido('oi');
+  const r7a = await pedido('oi, preciso de ajuda');
   const r7b = await pedido('oi de novo');
   confere('duas chamadas sem requestId processam as duas', r7a.text === 'Sem requestId, de boa.' && r7b.text === 'De novo, sem trava nenhuma.');
 

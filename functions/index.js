@@ -171,6 +171,19 @@ const MAX_FILES = 10;
 const MAX_TOTAL_BASE64_CHARS = 28 * 1024 * 1024;
 const MAX_MESSAGE_CHARS = 20 * 1024;
 const MAX_HISTORY_ITEMS = 80;
+// Saudação sozinha ("oi", "bom dia", "teste") sem anexo não precisa de IA: reenviar o prompt e o histórico só
+// pra responder "oi" chegou a custar US$ 0,20 (cache frio). Responde pronto, a custo zero.
+const SAUDACAO_SOZINHA = /^(\s*(oi+|ol[aá]+|bom dia|boa tarde|boa noite|tudo bem|opa|teste)[?!.,\s]*)+$/i;
+const RESPOSTA_SAUDACAO = "Olá! Pode anexar os relatórios do mês (Extrato, Contas a Pagar/Receber, etc.) para começarmos o fechamento.";
+function ehSaudacaoSozinha(message, files, history) {
+  if (Array.isArray(files) && files.length > 0) return false;
+  const texto = String(message || "");
+  if (texto.length > 40 || !SAUDACAO_SOZINHA.test(texto)) return false;
+  // se a última fala da IA é uma pergunta, "opa"/"tudo bem" pode ser a resposta dela: aí vai pra IA
+  const ultima = Array.isArray(history) && history.length ? history[history.length - 1] : null;
+  if (ultima && ultima.role === "assistant" && typeof ultima.text === "string" && /\?\s*$/.test(ultima.text.trim())) return false;
+  return true;
+}
 
 const TEXT_MEDIA_TYPES = new Set(["text/plain", "text/csv", "application/csv", "application/x-ofx", "text/ofx"]);
 const SPREADSHEET_MEDIA_TYPES = new Set([
@@ -2048,6 +2061,18 @@ exports.assistenteChat = onCall(
       return s.exists && s.data().excluindo !== true;
     };
     async function processarPedido() {
+    if (ehSaudacaoSozinha(message, files, history)) {
+      log("saudação sozinha: resposta pronta, sem chamar a IA");
+      if (empresaViva && (await empresaViva()) && requestId) {
+        const snapDono = processamentoRef ? await processamentoRef.get() : null;
+        if (!snapDono || !snapDono.exists || snapDono.data().attemptId === meuAttemptId) {
+          await db.collection("assistenteIA_empresas").doc(empresaId).collection("mensagens").doc(`resp-${requestId}`).set({
+            role: "assistant", text: RESPOSTA_SAUDACAO, files: [], arquivosGerados: [], criadoEm: FieldValue.serverTimestamp(), requestId,
+          });
+        }
+      }
+      return { text: RESPOSTA_SAUDACAO, usage: null, arquivosGerados: [] };
+    }
 
     // Histórico de relatórios já processados — vira contexto permanente da IA, independente
     // do tamanho do chat ou de quando o arquivo original foi enviado.

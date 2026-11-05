@@ -3143,7 +3143,12 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const fileNames = filesToSend.map(f => f.name);
     // Respostas que geraram arquivo levam uma marca no histórico: sem ela a IA relia as
     // próprias frases "aqui está o arquivo" como se bastasse dizer isso, e parava de gerar.
-    const history = currentMessages
+    // Mensagens com mais de 5 dias continuam na tela, mas não vão pra IA: o que ela aprendeu no mês passado já
+    // está salvo em padrões, observações e relatórios, e reenviar tudo isso custava ~US$ 0,10 de cache à toa.
+    const limiteIdadeMs = Date.now() - 5 * 24 * 60 * 60 * 1000;
+    const recentes = currentMessages.filter(m => !(m && m.criadoEm && typeof m.criadoEm.toMillis === 'function' && m.criadoEm.toMillis() < limiteIdadeMs));
+    while (recentes.length && recentes[0].role === 'assistant') recentes.shift(); // o histórico enviado começa por uma fala do usuário
+    const history = recentes
       .filter(m => m && typeof m.text === 'string' && m.text.trim())
       .slice(-80)
       .map(m => {

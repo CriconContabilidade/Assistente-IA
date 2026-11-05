@@ -367,7 +367,7 @@ const pedidoComArquivos = (message, files) => handler({
   console.log('\n7) conversa sem ferramenta');
   prepararEmpresa();
   roteiro = [resp([txt('Oi! Manda o extrato de agosto.')], 'end_turn')];
-  r = await pedido('oi');
+  r = await pedido('oi, preciso de ajuda');
   confere('uma chamada só, texto direto', chamadas.length === 1 && r.text === 'Oi! Manda o extrato de agosto.');
   confere('cache no prompt de sistema', chamadas[0].system[0].cache_control && chamadas[0].system[0].cache_control.type === 'ephemeral');
 
@@ -387,14 +387,14 @@ const pedidoComArquivos = (message, files) => handler({
       return resp([txt('Oi, tudo certo.')], 'end_turn');
     },
   ];
-  r = await pedido('oi');
+  r = await pedido('oi, preciso de ajuda');
   confere('resposta normal', r.text === 'Oi, tudo certo.', r.text);
 
   console.log('\n10) outro erro da API não é mascarado');
   prepararEmpresa();
   roteiro = [(params) => { throw new Error('rede caiu'); }];
   let erro = null;
-  try { await pedido('oi'); } catch (e) { erro = e; }
+  try { await pedido('oi, preciso de ajuda'); } catch (e) { erro = e; }
   confere('vira o erro amigável de sempre', erro && erro.code === 'internal' && /Erro ao falar com a IA/.test(erro.message), erro && erro.message);
   confere('não tentou de novo', chamadas.length === 1);
 
@@ -403,7 +403,7 @@ const pedidoComArquivos = (message, files) => handler({
   prepararEmpresa();
   for (let i = 1; i <= 10; i++) banco.set(`assistenteIA_empresas/mv/documentos/d${String(i).padStart(2, '0')}`, { arquivos: [`rel${i}.pdf`], resumo: 'X'.repeat(5000) + `FIM${i}` });
   roteiro = [resp([txt('ok')], 'end_turn')];
-  await pedido('oi');
+  await pedido('oi, preciso de ajuda');
   const promptDocs = chamadas[0].system[1].text;
   const qtdX = (promptDocs.match(/X/g) || []).length;
   confere('só 6 resumos recentes (1500) + 4 antigos (200) entram, não os 50000 caracteres', qtdX >= 9000 && qtdX <= 10000, String(qtdX));
@@ -418,7 +418,7 @@ const pedidoComArquivos = (message, files) => handler({
     resp([uso('atualizar_fechamento', { competencia: '08/2026', pendencias: 1 })], 'tool_use'),
     resp([txt('feito')], 'end_turn'),
   ];
-  r = await pedido('oi');
+  r = await pedido('oi, preciso de ajuda');
   confere('respondeu normalmente mesmo com a recusa', r.text === 'feito', r.text);
   confere('1ª tentativa pedia 1h', chamadas[0].system[0].cache_control.ttl === '1h');
   confere('repetição saiu sem ttl (cache padrão)', chamadas[1].system[0].cache_control && chamadas[1].system[0].cache_control.ttl === undefined);
@@ -431,7 +431,7 @@ const pedidoComArquivos = (message, files) => handler({
     () => { const e = new Error('404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-sonnet-5-5"}}'); e.status = 404; throw e; },
     resp([txt('respondi')], 'end_turn'),
   ];
-  r = await pedido('oi');
+  r = await pedido('oi, preciso de ajuda');
   confere('1ª tentativa no Sonnet 5.5', chamadas[0].model === 'claude-sonnet-5-5', chamadas[0].model);
   confere('após o 404 repete no modelo anterior e responde', chamadas[1].model === 'claude-sonnet-5' && r.text === 'respondi', chamadas[1] && chamadas[1].model);
   prepararEmpresa();
@@ -551,7 +551,7 @@ const pedidoComArquivos = (message, files) => handler({
   banco.set('assistenteIA_empresas/mv', { nome: 'MV', notas: ['MV tem observação própria XYZ'], responsavelEmail: '', codigoDominio: '185', cnpj: '21208224000163' });
   banco.set('assistenteIA_empresas/outra', { nome: 'Outra Empresa Ltda', notas: ['Outra tem regra diferente QWE'], responsavelEmail: '', codigoDominio: '77', cnpj: '43617343000102' });
   chamadas.length = 0;
-  const pedidoEmpresa = (id) => handler({ auth: { token: { email: 'contabilidadecricon@gmail.com' } }, data: { empresaId: id, message: 'oi', history: [], files: [] } });
+  const pedidoEmpresa = (id) => handler({ auth: { token: { email: 'contabilidadecricon@gmail.com' } }, data: { empresaId: id, message: 'oi, preciso de ajuda', history: [], files: [] } });
   roteiro = [resp([txt('ok')], 'end_turn')];
   await pedidoEmpresa('mv');
   roteiro = [resp([txt('ok')], 'end_turn')];
@@ -602,15 +602,15 @@ const pedidoComArquivos = (message, files) => handler({
   prepararEmpresa();
   banco.set('assistenteIA_empresas/mv/estado/atual', { pendencias: ['primeira'] });
   roteiro = [resp([txt('ok')], 'end_turn')];
-  await pedido('oi');
+  await pedido('oi, preciso de ajuda');
   const sistemaAntes = JSON.stringify(chamadas[0].system);
   banco.set('assistenteIA_empresas/mv/estado/atual', { pendencias: ['mudou o estado', 'outra'] });
   banco.set('assistenteIA_empresas/mv/fechamentos/2026-09', { competencia: '09/2026', relatorios: ['extrato', 'diario'] });
   roteiro = [resp([txt('ok')], 'end_turn')];
-  await pedido('oi');
+  await pedido('oi, preciso de ajuda');
   confere('mudar estado/fechamento NÃO muda o prompt de sistema (cache do histórico preservado)', JSON.stringify(chamadas[1].system) === sistemaAntes);
   confere('o estado novo chega na mensagem atual', ctxAtual(chamadas[1]).includes('mudou o estado') && ctxAtual(chamadas[1]).includes('09/2026'));
-  confere('a fala do usuário vem DEPOIS do contexto', chamadas[1].messages[chamadas[1].messages.length - 1].content.slice(-1)[0].text === 'oi');
+  confere('a fala do usuário vem DEPOIS do contexto', chamadas[1].messages[chamadas[1].messages.length - 1].content.slice(-1)[0].text === 'oi, preciso de ajuda');
 
   prepararEmpresa();
   banco.set('assistenteIA_empresas/mv/estado/atual', { pendencias: ['x'] });
@@ -712,7 +712,7 @@ const pedidoComArquivos = (message, files) => handler({
   for (let i = 1; i <= 8; i++) banco.set(`assistenteIA_empresas/mv/documentos/d${String(i).padStart(2, '0')}`, { arquivos: [`rel${i}.pdf`], resumo: 'R'.repeat(3000) + `FIM${i}` });
   for (let i = 1; i <= 5; i++) banco.set(`assistenteIA_empresas/mv/documentos/e${String(i).padStart(2, '0')}`, { arquivos: ['image.png'], resumo: 'I'.repeat(3000) + `PRINT${i}` });
   roteiro = [resp([txt('ok')], 'end_turn')];
-  await pedido('oi');
+  await pedido('oi, preciso de ajuda');
   const promptIdx = chamadas[0].system[1].text;
   const qtdR = (promptIdx.match(/R/g) || []).length;
   confere('prints antigos não roubam as 6 vagas completas: os relatórios mantêm 1500 chars', qtdR >= 6 * 1500 - 200, String(qtdR));
@@ -723,7 +723,7 @@ const pedidoComArquivos = (message, files) => handler({
   prepararEmpresa();
   falhasTransacao = 1;
   roteiro = [resp([txt('ok')], 'end_turn')];
-  await pedido('oi');
+  await pedido('oi, preciso de ajuda');
   const mesCons = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).slice(0, 7);
   const consEmp = banco.get(`assistenteIA_empresas/mv/consumo/${mesCons}`);
   const consGeral = banco.get(`assistenteIA_consumoGeral/${mesCons}`);
@@ -742,7 +742,7 @@ const pedidoComArquivos = (message, files) => handler({
   console.log('\n10m) excluir empresa durante um processamento: nada reaparece debaixo da empresa apagada');
   const chaves = (prefixo) => [...banco.keys()].filter((k) => k.startsWith(prefixo));
   const apagarEmpresaDoBanco = () => { for (const k of chaves('assistenteIA_empresas/mv')) banco.delete(k); };
-  const pedidoComId = (id, files = []) => handler({ auth: { token: { email: 'contabilidadecricon@gmail.com' } }, data: { empresaId: 'mv', message: 'oi', history: [], files, requestId: id } });
+  const pedidoComId = (id, files = []) => handler({ auth: { token: { email: 'contabilidadecricon@gmail.com' } }, data: { empresaId: 'mv', message: 'oi, preciso de ajuda', history: [], files, requestId: id } });
   const ERRO = async (p) => { try { await p; return null; } catch (e) { return e; } };
 
   prepararEmpresa();
@@ -806,7 +806,7 @@ const pedidoComArquivos = (message, files) => handler({
     },
   });
   roteiro = [resp([txt('ok')], 'end_turn')];
-  await pedido('oi');
+  await pedido('oi, preciso de ajuda');
   const ctxEstado = ctxAtual(chamadas[0]);
   confere('arquivo com mais de 3 dias vira só um resumo (sem as linhas)', !ctxEstado.includes('LINHA VELHA UNICA') && !ctxEstado.includes('11111,11') && /ÚLTIMO ARQUIVO lanctos \(lanctos\.txt\): 1 linha/.test(ctxEstado), ctxEstado.slice(0, 400));
   confere('arquivo de hoje continua com as linhas (pra poder corrigir)', ctxEstado.includes('52998224725') && ctxEstado.includes('22222.22'));
@@ -949,7 +949,7 @@ const pedidoComArquivos = (message, files) => handler({
   prepararEmpresa();
   banco.set('assistenteIA_empresas/mv/documentos/d1', { arquivos: ['antigo.pdf'], resumo: 'RESUMO-ANTIGO-ABC', criadoEm: ms(Date.now() - 3 * 3600000) });
   roteiro = [resp([txt('ok')], 'end_turn')];
-  await pedido('oi');
+  await pedido('oi, preciso de ajuda');
   const sistemaBase = JSON.stringify(chamadas[0].system);
   confere('relatório com mais de 2 horas fica no histórico do prompt de sistema', chamadas[0].system[1].text.includes('antigo.pdf') && chamadas[0].system[1].text.includes('RESUMO-ANTIGO-ABC'));
   chamadas.length = 0;
@@ -1037,13 +1037,13 @@ const pedidoComArquivos = (message, files) => handler({
   banco.set('assistenteIA_empresas/mv', { ...banco.get('assistenteIA_empresas/mv'), tributacao: 'Simples Nacional', servicoPrestado: 'ATIVIDADE-QWX9' });
   chamadas.length = 0;
   roteiro = [resp([txt('ok')], 'end_turn')];
-  await pedido('oi');
+  await pedido('oi, preciso de ajuda');
   confere('tributação e serviço aparecem no contexto atual', /tributação Simples Nacional/.test(ctxAtual(chamadas[0])) && /serviço\/atividade: ATIVIDADE-QWX9/.test(ctxAtual(chamadas[0])), ctxAtual(chamadas[0]).slice(0, 400));
   confere('e não entram no prompt de sistema em cache', !/ATIVIDADE-QWX9/.test(JSON.stringify(chamadas[0].system)));
   prepararEmpresa();
   chamadas.length = 0;
   roteiro = [resp([txt('ok')], 'end_turn')];
-  await pedido('oi');
+  await pedido('oi, preciso de ajuda');
   confere('sem tributação nem serviço cadastrados, nada disso aparece', !/Perfil da empresa/.test(ctxAtual(chamadas[0])));
 
   console.log('\n10aa) prefixo fixo frio: a gravação dele não pesa no limite da empresa (o total do escritório mantém o custo real)');
@@ -1051,7 +1051,7 @@ const pedidoComArquivos = (message, files) => handler({
   const mesAa = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit' }).format(new Date()).slice(0, 7);
   banco.delete(`assistenteIA_empresas/mv/consumo/${mesAa}`); banco.delete(`assistenteIA_consumoGeral/${mesAa}`);
   roteiro = [{ content: [txt('ok')], stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 50000, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 50000 } } }];
-  await pedido('oi');
+  await pedido('oi, preciso de ajuda');
   const empAa = banco.get(`assistenteIA_empresas/mv/consumo/${mesAa}`), gerAa = banco.get(`assistenteIA_consumoGeral/${mesAa}`);
   confere('escritório soma o custo real (US$ 0,20 de gravação)', gerAa && gerAa.custoUsd > 0.2 && gerAa.custoUsd < 0.21, JSON.stringify(gerAa));
   confere('empresa paga menos no limite dela (prefixo fixo descontado) e o custo real fica guardado', empAa && empAa.custoUsd < gerAa.custoUsd - 0.02 && Math.abs(empAa.custoRealUsd - gerAa.custoUsd) < 1e-9, JSON.stringify(empAa));
@@ -1060,6 +1060,25 @@ const pedidoComArquivos = (message, files) => handler({
   await pedido('oi de novo');
   const empAb = banco.get(`assistenteIA_empresas/mv/consumo/${mesAa}`);
   confere('com o prefixo quente (leitura alta) nada é descontado', empAb && Math.abs(empAb.custoUsd - empAb.custoRealUsd) < 1e-9, JSON.stringify(empAb));
+
+  console.log('"\"n10ab) saudação sozinha: resposta pronta, sem chamar a IA e sem custo');
+  prepararEmpresa();
+  chamadas.length = 0;
+  roteiro = [resp([txt('NAO DEVIA CHAMAR')], 'end_turn')];
+  const comId = (message, history = [], files = [], requestId = 'sd-' + Math.random()) => handler({ auth: { token: { email: 'contabilidadecricon@gmail.com' } }, data: { empresaId: 'mv', message, history, files, requestId } });
+  const rSd = await comId('Oi!', [], [], 'sd-1');
+  confere('"Oi!" sem anexo: nenhuma chamada à IA e resposta pronta', chamadas.length === 0 && /Pode anexar os relatórios do mês/.test(rSd.text), JSON.stringify(rSd).slice(0, 200));
+  confere('a resposta é gravada no chat com o id determinístico', !!banco.get('assistenteIA_empresas/mv/mensagens/resp-sd-1') && banco.get('assistenteIA_empresas/mv/mensagens/resp-sd-1').role === 'assistant');
+  for (const t of ['bom dia', 'Olá, boa tarde!', 'teste', 'oi tudo bem?']) {
+    chamadas.length = 0; await comId(t);
+    confere(`"${t}" também é saudação`, chamadas.length === 0);
+  }
+  chamadas.length = 0; roteiro = [resp([txt('ok')], 'end_turn')];
+  await comId('oi, preciso do fechamento de outubro');
+  confere('saudação com pedido junto vai pra IA', chamadas.length === 1);
+  chamadas.length = 0; roteiro = [resp([txt('ok')], 'end_turn')];
+  await comId('oi', [{ role: 'assistant', text: 'Você confirma o padrão da tarifa?' }]);
+  confere('se a IA acabou de fazer uma pergunta, "oi" vai pra IA (pode ser a resposta)', chamadas.length === 1);
 
   console.log('\n11) busca por nome acha registro com nome duplicado/cortado e devolve o CPF (achado em uso real: Fernanda Cado Waihrich)');
   prepararEmpresa();
