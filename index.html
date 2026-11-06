@@ -2273,7 +2273,7 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const arquivosGerados = (Array.isArray(m.arquivosGerados) ? m.arquivosGerados : []).filter(a => a && a.nome && a.base64);
     // arquivo grande demais pro Firestore: o conteúdo completo veio na resposta da função e fica
     // guardado só nesta sessão da página (some se a página for recarregada)
-    const completosDaSessao = (m.requestId && arquivosDaSessao.get(m.requestId)) || [];
+    const completosDaSessao = (m.role !== 'user' && m.requestId && arquivosDaSessao.get(m.requestId)) || [];
     completosDaSessao.forEach((g) => { if (!arquivosGerados.some(a => a.nome === g.nome)) arquivosGerados.push(g); });
     // Arquivo grande demais pra caber no documento do Firestore (item 12 da auditoria do Codex)
     // some do filtro acima por não ter base64 — sem aviso, parecia que o arquivo nunca foi
