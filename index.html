@@ -1930,23 +1930,29 @@ Caso não saiba onde emitir esses relatórios no sistema Domínio, basta me perg
     const ultimo = ultimaAtividadeCache();
     if (!ultimo || ultimo === pingFeitoPara) return;
     const parado = Date.now() - ultimo;
-    if (parado < 58 * 60000 || parado >= 60 * 60000) return;
+    // A frase aparece quando passam 58 min sem atividade, mesmo que a aba tenha ficado dormindo e o relógio só tenha
+    // acordado depois (aba em segundo plano ou computador suspenso perdiam a janela de 2 min e o aviso nunca vinha).
+    // O ping só faz sentido enquanto o cache ainda está vivo (até 60 min); depois disso só a frase.
+    if (parado < 58 * 60000 || parado > 3 * 60 * 60000) return;
     if (!currentMessages.some(m => m && m.role === 'user')) return;
     pingEmAndamento = true;
     pingFeitoPara = ultimo;
     const empresaIdPing = activeEmpresaId;
     try {
-      const r = await assistenteChat({ empresaId: empresaIdPing, keepAlive: true, history: historicoParaIA() });
-      if (r && r.data && r.data.ignorado) return;
-      pingPorEmpresa.set(empresaIdPing, Date.now());
+      if (parado < 60 * 60000) {
+        try {
+          const r = await assistenteChat({ empresaId: empresaIdPing, keepAlive: true, history: historicoParaIA() });
+          if (!(r && r.data && r.data.ignorado)) pingPorEmpresa.set(empresaIdPing, Date.now());
+        } catch (err) {
+          console.warn('Keep-alive do cache não funcionou (sem problema, o cache só esfria):', err && err.message);
+        }
+      }
       if (empresaIdPing === activeEmpresaId) {
         const frase = aplicarFraseOciosa(FRASES_OCIO[Math.floor(Math.random() * FRASES_OCIO.length)], primeiroNomeLogado());
         avisoOcioso = { empresaId: empresaIdPing, texto: frase };
         redesenharMensagens();
       }
       atualizarSeloCache();
-    } catch (err) {
-      console.warn('Keep-alive do cache não funcionou (sem problema, o cache só esfria):', err && err.message);
     } finally {
       pingEmAndamento = false;
     }
